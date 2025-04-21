@@ -598,8 +598,6 @@ async def slash_crear_cedula(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
 
 @bot.tree.command(name="ver-cedula", description="Muestra la cédula de identidad de un usuario")
 @app_commands.describe(ciudadano="Ciudadano del que quieres ver la cédula (opcional, por defecto tú mismo)")
@@ -789,8 +787,7 @@ async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: dis
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -1001,8 +998,7 @@ async def slash_tramitar_licencia(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 @bot.tree.command(name="ver-licencia", description="Muestra una licencia específica de un ciudadano")
 @app_commands.describe(
@@ -1267,8 +1263,7 @@ async def slash_revocar_licencia(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 # Función para validar formato de placa
 def validar_placa(placa):
@@ -1576,8 +1571,7 @@ async def slash_registrar_vehiculo(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 @bot.tree.command(name="ver-vehiculo", description="Muestra la información de un vehículo por su placa")
 @app_commands.describe(placa="Placa del vehículo (formato ABC-123)")
@@ -1851,8 +1845,7 @@ async def slash_eliminar_vehiculo(interaction: discord.Interaction, placa: str):
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 # Función para generar un código único
 def generar_codigo_pago():
@@ -2053,8 +2046,7 @@ async def slash_crear_codigo_pago(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 # Función para autocompletar zona
 async def autocompletar_zona(
@@ -2382,8 +2374,7 @@ async def slash_registrar_propiedad(
             color=discord.Color.red()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 @bot.tree.command(name="eliminar-propiedad", description="Elimina el registro de una propiedad")
 @app_commands.describe(numero_domicilio="Número de domicilio de la propiedad a eliminar")
@@ -2536,8 +2527,7 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, numero_domi
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        conn.close()
+
 
 @bot.tree.command(name="ver-propiedad", description="Muestra la información de una propiedad por su número de domicilio")
 @app_commands.describe(numero_domicilio="Número de domicilio de la propiedad")
@@ -3224,9 +3214,6 @@ async def slash_arrestar_ciudadano(
         )
         embed.set_footer(text="Sistema Judicial - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
-        
-    finally:
-        conn.close()
 
 @bot.tree.command(
     name="multar",
@@ -3554,9 +3541,7 @@ async def slash_multar_ciudadano(
         )
         embed.set_footer(text="Sistema Judicial - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
-        
-    finally:
-        conn.close()
+
 
 @bot.tree.command(
     name="borrar-antecedentes",
