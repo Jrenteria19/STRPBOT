@@ -451,16 +451,6 @@ async def slash_crear_cedula(
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    # Verificar que el usuario tenga permisos para crear cédulas
-    if not interaction.user.guild_permissions.administrator:
-        embed = discord.Embed(
-            title="❌ Sin permisos",
-            description="Solo los administradores pueden crear cédulas de identidad.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
     # Verificar si el usuario ya tiene una cédula
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
