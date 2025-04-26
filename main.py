@@ -98,7 +98,7 @@ def init_db():
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id BIGINT PRIMARY KEY,
-            prefix TEXT DEFAULT '!',
+            prefix VARCHAR(10) DEFAULT '!',
             welcome_channel_id BIGINT,
             welcome_message TEXT
         )
