@@ -108,7 +108,7 @@ def init_db():
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS cedulas (
             user_id BIGINT PRIMARY KEY,
-            rut TEXT NOT NULL UNIQUE,
+            rut VARCHAR(20) NOT NULL UNIQUE,
             primer_nombre TEXT NOT NULL,
             segundo_nombre TEXT NOT NULL,
             apellido_paterno TEXT NOT NULL,
