@@ -203,7 +203,7 @@ def init_db():
             foto_url TEXT NOT NULL,
             fecha_arresto TEXT NOT NULL,
             oficial_id TEXT NOT NULL,
-            estado TEXT DEFAULT 'Activo'
+            estado VARCHAR(20) DEFAULT 'Activo'
         )
         ''')
 
@@ -218,7 +218,7 @@ def init_db():
             foto_url TEXT NOT NULL,
             fecha_multa TEXT NOT NULL,
             oficial_id TEXT NOT NULL,
-            estado TEXT DEFAULT 'Pendiente'
+            estado VARCHAR(20) DEFAULT 'Pendiente'
         )
         ''')
 
