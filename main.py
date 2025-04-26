@@ -31,11 +31,11 @@ intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)  # Mantenemos el prefijo pero no usaremos comandos de prefijo
 
 # Conexión global a la base de datos MySQL de Railway
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_NAME = os.getenv("DB_NAME", "santiagorpdb")
-DB_PORT = int(os.getenv("DB_PORT", "3306"))
+DB_HOST = os.getenv("MYSQLHOST", "mysql.railway.internal")
+DB_USER = os.getenv("MYSQLUSER", "root")
+DB_PASSWORD = os.getenv("MYSQLPASSWORD", "FPaHGLioxfZPXgtQcdmpJbLNbeBwSRTl")
+DB_NAME = os.getenv("MYSQL_DATABASE", "railway")
+DB_PORT = int(os.getenv("MYSQLPORT", "3306"))
 
 db_lock = threading.Lock()
 db_connection = None
