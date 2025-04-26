@@ -2,7 +2,7 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-import sqlite3
+import pymysql
 import logging
 from dotenv import load_dotenv
 import datetime
@@ -30,17 +30,30 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)  # Mantenemos el prefijo pero no usaremos comandos de prefijo
 
-# Conexión global a la base de datos
-DB_PATH = os.getenv("DB_PATH", "/data/database.db")
+# Conexión global a la base de datos MySQL de Railway
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_NAME = os.getenv("DB_NAME", "santiagorpdb")
+DB_PORT = int(os.getenv("DB_PORT", "3306"))
+
 db_lock = threading.Lock()
 db_connection = None
 
 def get_db_connection():
-    """Obtiene la conexión global a la base de datos"""
+    """Obtiene la conexión global a la base de datos MySQL"""
     global db_connection
     if db_connection is None:
-        db_connection = sqlite3.connect(DB_PATH, timeout=10)
-        db_connection.execute("PRAGMA journal_mode=WAL")
+        db_connection = pymysql.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            port=DB_PORT,
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=False
+        )
     return db_connection
 
 def execute_with_retry(query, params=(), max_retries=3, retry_delay=1):
@@ -53,8 +66,8 @@ def execute_with_retry(query, params=(), max_retries=3, retry_delay=1):
                 cursor.execute(query, params)
                 conn.commit()
                 return cursor
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < max_retries - 1:
+            except pymysql.OperationalError as e:
+                if "Lock wait timeout" in str(e) and attempt < max_retries - 1:
                     logger.warning(f"Database locked, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_delay)
                     continue
@@ -63,11 +76,7 @@ def execute_with_retry(query, params=(), max_retries=3, retry_delay=1):
             except Exception:
                 conn.rollback()
                 raise
-    raise sqlite3.OperationalError("Database is locked after maximum retries")
-
-# Asegurar que el directorio de datos existe, si aplica
-if os.path.dirname(DB_PATH):  # Solo intenta crear el directorio si DB_PATH tiene un componente de directorio
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    raise pymysql.OperationalError("Database is locked after maximum retries")
 
 def init_db():
     """Inicializa la base de datos si no existe"""
@@ -78,7 +87,7 @@ def init_db():
         # Crear tabla de usuarios
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             username TEXT NOT NULL,
             points INTEGER DEFAULT 0,
             last_daily TEXT
@@ -88,9 +97,9 @@ def init_db():
         # Crear tabla de configuración del servidor
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id INTEGER PRIMARY KEY,
+            guild_id BIGINT PRIMARY KEY,
             prefix TEXT DEFAULT '!',
-            welcome_channel_id INTEGER,
+            welcome_channel_id BIGINT,
             welcome_message TEXT
         )
         ''')
@@ -98,8 +107,8 @@ def init_db():
         # Crear tabla de cédulas de identidad
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS cedulas (
-            user_id INTEGER PRIMARY KEY,
-            rut TEXT UNIQUE NOT NULL,
+            user_id BIGINT PRIMARY KEY,
+            rut TEXT NOT NULL UNIQUE,
             primer_nombre TEXT NOT NULL,
             segundo_nombre TEXT NOT NULL,
             apellido_paterno TEXT NOT NULL,
@@ -118,13 +127,13 @@ def init_db():
         # Crear tabla de licencias
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS licencias (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             tipo_licencia TEXT NOT NULL,
             nombre_licencia TEXT NOT NULL,
             fecha_emision TEXT NOT NULL,
             fecha_vencimiento TEXT NOT NULL,
-            emitida_por INTEGER NOT NULL,
+            emitida_por BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         )
         ''')
@@ -132,9 +141,9 @@ def init_db():
         # Crear tabla de vehículos
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS vehiculos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            placa TEXT UNIQUE NOT NULL,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            placa TEXT NOT NULL UNIQUE,
             modelo TEXT NOT NULL,
             marca TEXT NOT NULL,
             gama TEXT NOT NULL,
@@ -145,7 +154,7 @@ def init_db():
             codigo_pago TEXT NOT NULL,
             imagen_url TEXT NOT NULL,
             fecha_registro TEXT NOT NULL,
-            registrado_por INTEGER NOT NULL,
+            registrado_por BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         )
         ''')
@@ -156,11 +165,11 @@ def init_db():
             code TEXT PRIMARY KEY,
             amount INTEGER NOT NULL,
             description TEXT NOT NULL,
-            user_id INTEGER NOT NULL,
+            user_id BIGINT NOT NULL,
             used BOOLEAN DEFAULT FALSE,
             created_at TEXT NOT NULL,
             used_at TEXT,
-            created_by INTEGER NOT NULL,
+            created_by BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         )
         ''')
@@ -168,17 +177,61 @@ def init_db():
         # Crear tabla de propiedades
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS propiedades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            numero_domicilio TEXT UNIQUE NOT NULL,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            numero_domicilio TEXT NOT NULL UNIQUE,
             zona TEXT NOT NULL,
             color TEXT NOT NULL,
             numero_pisos INTEGER NOT NULL,
             codigo_pago TEXT NOT NULL,
             imagen_url TEXT NOT NULL,
             fecha_registro TEXT NOT NULL,
-            registrado_por INTEGER NOT NULL,
+            registrado_por BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
+        )
+        ''')
+
+        # Crear tabla de arrestos
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS arrestos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            rut TEXT NOT NULL,
+            razon TEXT NOT NULL,
+            tiempo_prision TEXT NOT NULL,
+            monto_multa INTEGER NOT NULL,
+            foto_url TEXT NOT NULL,
+            fecha_arresto TEXT NOT NULL,
+            oficial_id TEXT NOT NULL,
+            estado TEXT DEFAULT 'Activo'
+        )
+        ''')
+
+        # Crear tabla de multas
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS multas (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            rut TEXT NOT NULL,
+            razon TEXT NOT NULL,
+            monto_multa INTEGER NOT NULL,
+            foto_url TEXT NOT NULL,
+            fecha_multa TEXT NOT NULL,
+            oficial_id TEXT NOT NULL,
+            estado TEXT DEFAULT 'Pendiente'
+        )
+        ''')
+
+        # Crear tabla de emergencias
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS emergencias (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT,
+            razon TEXT,
+            servicio TEXT,
+            ubicacion TEXT,
+            fecha TEXT,
+            servicios_notificados TEXT
         )
         ''')
 
@@ -251,11 +304,10 @@ def generar_rut():
         rut = f"{num}-{dv}"
         
         # Verificar si el RUT ya existe en la base de datos
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT rut FROM cedulas WHERE rut = ?', (rut,))
+        cursor.execute('SELECT rut FROM cedulas WHERE rut = %s', (rut,))
         result = cursor.fetchone()
-        conn.close()
         
         if not result:
             return rut
@@ -452,16 +504,16 @@ async def slash_crear_cedula(
         return
     
     # Verificar si el usuario ya tiene una cédula
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute('SELECT rut FROM cedulas WHERE user_id = ?', (interaction.user.id,))
+    cursor.execute('SELECT rut FROM cedulas WHERE user_id = %s', (interaction.user.id,))
     cedula_existente = cursor.fetchone()
     
     if cedula_existente:
         embed = discord.Embed(
             title="❌ Ya tienes una cédula",
-            description=f"Ya tienes una cédula de identidad registrada con el RUT: **{cedula_existente[0]}**",
+            description=f"Ya tienes una cédula de identidad registrada con el RUT: **{cedula_existente['rut']}**",
             color=discord.Color.red()
         )
         embed.add_field(
@@ -471,7 +523,6 @@ async def slash_crear_cedula(
         )
         embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
         await interaction.response.send_message(embed=embed, ephemeral=True)
-        conn.close()
         return
     
     # Validar fecha de nacimiento
@@ -483,7 +534,6 @@ async def slash_crear_cedula(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-        conn.close()
         return
     
     # Validar género
@@ -498,101 +548,80 @@ async def slash_crear_cedula(
     
     # Obtener avatar de Roblox
     avatar_url = await obtener_avatar_roblox(usuario_roblox)
-    if not avatar_url:
-        embed = discord.Embed(
-            title="❌ Usuario de Roblox inválido",
-            description="No se pudo encontrar el usuario de Roblox especificado.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
     
     # Generar RUT único
     rut = generar_rut()
     
-    # Calcular fechas de emisión y vencimiento
-    fecha_emision = datetime.now().strftime("%d/%m/%Y")
-    fecha_vencimiento = (datetime.now() + timedelta(days=365*5)).strftime("%d/%m/%Y")  # 5 años de validez
+    # Generar fechas de emisión y vencimiento
+    fecha_emision = datetime.now().strftime("%d-%m-%Y")
+    fecha_vencimiento = (datetime.now() + timedelta(days=365*5)).strftime("%d-%m-%Y")  # 5 años de validez
     
     # Guardar en la base de datos
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
     try:
         cursor.execute('''
-        INSERT OR REPLACE INTO cedulas 
-        (user_id, rut, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno, 
-        fecha_nacimiento, edad, nacionalidad, genero, usuario_roblox, fecha_emision, 
-        fecha_vencimiento, avatar_url) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (interaction.user.id, rut, primer_nombre, segundo_nombre, apellido_paterno, 
-              apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, 
-              usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url))
-        
+        INSERT INTO cedulas (
+            user_id, rut, primer_nombre, segundo_nombre, apellido_paterno, 
+            apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, 
+            usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            interaction.user.id, rut, primer_nombre, segundo_nombre, apellido_paterno,
+            apellido_materno, fecha_nacimiento, edad, nacionalidad, genero,
+            usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
+        ))
         conn.commit()
         
-        # Crear y enviar el mensaje embebido con la cédula
+        # Crear embed con la información de la cédula
         embed = discord.Embed(
-            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-            description="SERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(name="CÉDULA DE IDENTIDAD", value=f"RUT: {rut}", inline=False)
-        
-        # Información personal en columnas
-        embed.add_field(name="Nombres", value=f"{primer_nombre} {segundo_nombre}", inline=True)
-        embed.add_field(name="Apellidos", value=f"{apellido_paterno} {apellido_materno}", inline=True)
-        embed.add_field(name="Nacionalidad", value=nacionalidad, inline=True)
-        
-        embed.add_field(name="Fecha Nacimiento", value=fecha_nacimiento, inline=True)
-        embed.add_field(name="Sexo", value="M" if genero.upper() == "M" else "F", inline=True)
-        embed.add_field(name="Edad", value=f"{edad} años", inline=True)
-        
-        embed.add_field(name="Fecha Emisión", value=fecha_emision, inline=True)
-        embed.add_field(name="Fecha Vencimiento", value=fecha_vencimiento, inline=True)
-        embed.add_field(name="USUARIO DE ROBLOX", value=usuario_roblox, inline=True)
-        
-        # Establecer la imagen del avatar de Roblox
-        embed.set_thumbnail(url=avatar_url)
-        
-        # Enviar la cédula al canal
-        await interaction.response.send_message(embed=embed)
-        
-        # Enviar mensaje efímero de confirmación al usuario
-        confirmacion_embed = discord.Embed(
-            title="✅ ¡Cédula Creada con Éxito!",
-            description=f"Tu cédula de identidad ha sido creada correctamente con el RUT: **{rut}**",
+            title="✅ Cédula de Identidad Creada",
+            description=f"Se ha creado exitosamente tu cédula de identidad con el RUT: **{rut}**",
             color=discord.Color.green()
         )
-        confirmacion_embed.add_field(
-            name="📋 Ver tu Cédula",
-            value=f"Puedes ver tu cédula en cualquier momento usando el comando `/ver-cedula` en el canal <#{1339386616803885089}>",
-            inline=False
-        )
-        confirmacion_embed.add_field(
-            name="🔍 Información Adicional",
-            value="Tu cédula contiene toda la información que has proporcionado y es visible para todos los miembros del servidor.",
-            inline=False
-        )
-        confirmacion_embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
         
-        # Enviar mensaje efímero al usuario
-        await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
+        embed.add_field(name="Nombre Completo", value=f"{primer_nombre} {segundo_nombre} {apellido_paterno} {apellido_materno}", inline=False)
+        embed.add_field(name="Fecha de Nacimiento", value=fecha_nacimiento, inline=True)
+        embed.add_field(name="Edad", value=str(edad), inline=True)
+        embed.add_field(name="Nacionalidad", value=nacionalidad, inline=True)
+        embed.add_field(name="Género", value="Masculino" if genero == "M" else "Femenino", inline=True)
+        embed.add_field(name="Usuario Roblox", value=usuario_roblox, inline=True)
+        embed.add_field(name="Fecha de Emisión", value=fecha_emision, inline=True)
+        embed.add_field(name="Fecha de Vencimiento", value=fecha_vencimiento, inline=True)
+        
+        embed.set_thumbnail(url=avatar_url)
+        embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
+        
+        await interaction.response.send_message(embed=embed)
+        
+        # Enviar mensaje en el canal de registros
+        canal_registros = bot.get_channel(1339386616803885090)  # ID del canal de registros
+        if canal_registros:
+            embed_registro = discord.Embed(
+                title="📋 Nueva Cédula Registrada",
+                description=f"El usuario {interaction.user.mention} ha registrado una nueva cédula de identidad.",
+                color=discord.Color.blue()
+            )
+            embed_registro.add_field(name="RUT", value=rut, inline=True)
+            embed_registro.add_field(name="Nombre", value=f"{primer_nombre} {apellido_paterno}", inline=True)
+            embed_registro.add_field(name="Usuario Roblox", value=usuario_roblox, inline=True)
+            embed_registro.set_thumbnail(url=avatar_url)
+            embed_registro.set_footer(text=f"ID: {interaction.user.id} • {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+            
+            await canal_registros.send(embed=embed_registro)
         
     except Exception as e:
         logger.error(f"Error al crear cédula: {e}")
         embed = discord.Embed(
-            title="❌ Error al crear cédula",
-            description=f"Ocurrió un error al crear la cédula: {e}",
+            title="❌ Error",
+            description="Ocurrió un error al crear tu cédula. Por favor, intenta nuevamente más tarde.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="ver-cedula", description="Muestra la cédula de identidad de un usuario")
-@app_commands.describe(ciudadano="Ciudadano del que quieres ver la cédula (opcional, por defecto tú mismo)")
+@bot.tree.command(name="ver-cedula", description="Muestra tu cédula de identidad o la de otro usuario")
+@app_commands.describe(ciudadano="Usuario del que quieres ver la cédula (opcional)")
 async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.Member = None):
-    """Muestra la cédula de identidad de un usuario usando comandos de barra diagonal"""
+    """Muestra la cédula de identidad del usuario o de otro miembro"""
+    
     # Verificar que el comando se use en el canal correcto
     if interaction.channel_id != 1339386616803885089:
         embed = discord.Embed(
@@ -603,56 +632,51 @@ async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    ciudadano = ciudadano or interaction.user
+    # Si no se especifica un ciudadano, mostrar la cédula del usuario que ejecuta el comando
+    if ciudadano is None:
+        ciudadano = interaction.user
     
-    conn = sqlite3.connect(DB_PATH)
+    # Obtener la cédula de la base de datos
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
-    SELECT rut, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno, 
-    fecha_nacimiento, edad, nacionalidad, genero, usuario_roblox, fecha_emision, 
-    fecha_vencimiento, avatar_url 
-    FROM cedulas WHERE user_id = ?
+    SELECT * FROM cedulas WHERE user_id = %s
     ''', (ciudadano.id,))
     
-    result = cursor.fetchone()
-    conn.close()
+    cedula = cursor.fetchone()
     
-    if not result:
+    if not cedula:
         embed = discord.Embed(
             title="❌ Cédula no encontrada",
-            description=f"{ciudadano.display_name} no tiene una cédula de identidad registrada.",
+            description=f"No se encontró una cédula registrada para {ciudadano.mention}.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    rut, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url = result
-    
-    # Crear y enviar el mensaje embebido con la cédula
+    # Crear embed con la información de la cédula
     embed = discord.Embed(
-        title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-        description="SERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN",
+        title="🪪 Cédula de Identidad",
+        description=f"**RUT:** {cedula['rut']}",
         color=discord.Color.blue()
     )
     
-    embed.add_field(name="CÉDULA DE IDENTIDAD", value=f"RUT: {rut}", inline=False)
+    embed.add_field(
+        name="Nombre Completo", 
+        value=f"{cedula['primer_nombre']} {cedula['segundo_nombre']} {cedula['apellido_paterno']} {cedula['apellido_materno']}", 
+        inline=False
+    )
+    embed.add_field(name="Fecha de Nacimiento", value=cedula['fecha_nacimiento'], inline=True)
+    embed.add_field(name="Edad", value=str(cedula['edad']), inline=True)
+    embed.add_field(name="Nacionalidad", value=cedula['nacionalidad'], inline=True)
+    embed.add_field(name="Género", value="Masculino" if cedula['genero'] == "M" else "Femenino", inline=True)
+    embed.add_field(name="Usuario Roblox", value=cedula['usuario_roblox'], inline=True)
+    embed.add_field(name="Fecha de Emisión", value=cedula['fecha_emision'], inline=True)
+    embed.add_field(name="Fecha de Vencimiento", value=cedula['fecha_vencimiento'], inline=True)
     
-    # Información personal en columnas
-    embed.add_field(name="Nombres", value=f"{primer_nombre} {segundo_nombre}", inline=True)
-    embed.add_field(name="Apellidos", value=f"{apellido_paterno} {apellido_materno}", inline=True)
-    embed.add_field(name="Nacionalidad", value=nacionalidad, inline=True)
-    
-    embed.add_field(name="Fecha Nacimiento", value=fecha_nacimiento, inline=True)
-    embed.add_field(name="Sexo", value="M" if genero.upper() == "M" else "F", inline=True)
-    embed.add_field(name="Edad", value=f"{edad} años", inline=True)
-    
-    embed.add_field(name="Fecha Emisión", value=fecha_emision, inline=True)
-    embed.add_field(name="Fecha Vencimiento", value=fecha_vencimiento, inline=True)
-    embed.add_field(name="USUARIO DE ROBLOX", value=usuario_roblox, inline=True)
-    
-    # Establecer la imagen del avatar de Roblox
-    embed.set_thumbnail(url=avatar_url)
+    embed.set_thumbnail(url=cedula['avatar_url'])
+    embed.set_footer(text=f"Santiago RP - Sistema de Registro Civil • ID: {ciudadano.id}")
     
     await interaction.response.send_message(embed=embed)
 
@@ -4091,6 +4115,5 @@ async def slash_ayuda(interaction: discord.Interaction):
     # Enviar mensaje
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# Ejecutar el bot
-if __name__ == "__main__":
-    bot.run(TOKEN)
+# Iniciar el bot
+bot.run(TOKEN)
