@@ -162,7 +162,7 @@ def init_db():
         # Crear tabla de códigos de pago
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS payment_codes (
-            code TEXT PRIMARY KEY,
+            code VARCHAR(50) PRIMARY KEY,
             amount INTEGER NOT NULL,
             description TEXT NOT NULL,
             user_id BIGINT NOT NULL,
@@ -179,7 +179,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS propiedades (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
-            numero_domicilio TEXT NOT NULL UNIQUE,
+            numero_domicilio VARCHAR(30) NOT NULL UNIQUE,
             zona TEXT NOT NULL,
             color TEXT NOT NULL,
             numero_pisos INTEGER NOT NULL,
