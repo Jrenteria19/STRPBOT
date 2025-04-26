@@ -143,7 +143,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS vehiculos (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
-            placa TEXT NOT NULL UNIQUE,
+            placa VARCHAR(20) NOT NULL UNIQUE,
             modelo TEXT NOT NULL,
             marca TEXT NOT NULL,
             gama TEXT NOT NULL,
