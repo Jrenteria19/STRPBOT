@@ -3895,6 +3895,22 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
             cursor.close()
             conn.close()
         
+        # Validar URL del avatar
+        default_avatar_url = "https://discord.com/assets/1f0bfc0865d324c2587920a7d80c609b.png"  # URL predeterminada de Discord
+        avatar_url = None
+        if roblox_avatar and isinstance(roblox_avatar, str) and roblox_avatar.startswith(('http://', 'https://')):
+            avatar_url = roblox_avatar
+        else:
+            try:
+                avatar_url = ciudadano.display_avatar.url if ciudadano.display_avatar else default_avatar_url
+            except Exception as e:
+                logger.warning(f"Error al obtener display_avatar.url para el usuario {ciudadano.id}: {str(e)}")
+                avatar_url = default_avatar_url
+        
+        if not avatar_url:
+            logger.warning(f"No se pudo determinar una URL válida para el thumbnail del usuario {ciudadano.id}")
+            avatar_url = default_avatar_url
+        
         # Si no hay antecedentes, mostrar mensaje
         if not arrestos and not multas:
             embed = discord.Embed(
@@ -3907,7 +3923,7 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
                 value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
                 inline=False
             )
-            embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
+            embed.set_thumbnail(url=avatar_url)
             embed.set_footer(
                 text="Sistema de Justicia - SantiagoRP",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
@@ -3982,7 +3998,7 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
                 inline=False
             )
         
-        embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
+        embed.set_thumbnail(url=avatar_url)
         embed.set_footer(
             text="Sistema de Justicia - SantiagoRP",
             icon_url=interaction.guild.icon.url if interaction.guild.icon else None
@@ -3995,6 +4011,15 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
         embed = discord.Embed(
             title="⚠️ ERROR AL CONSULTAR ANTECEDENTES ⚠️",
             description=f"Ocurrió un error al consultar los antecedentes: {str(e)}",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.errors.HTTPException as e:
+        logger.error(f"Error al enviar embed en ver_antecedentes: {str(e)}")
+        embed = discord.Embed(
+            title="⚠️ ERROR AL MOSTRAR ANTECEDENTES ⚠️",
+            description="Ocurrió un error al mostrar los antecedentes. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         embed.set_footer(text="Sistema de Justicia - SantiagoRP")
