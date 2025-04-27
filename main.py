@@ -1419,6 +1419,9 @@ async def slash_registrar_vehiculo(
 ):
     """Registra un vehículo para un ciudadano (solo roles autorizados)"""
     
+    # Diferir la respuesta para evitar timeout
+    await interaction.response.defer(thinking=True)
+    
     # Lista de roles autorizados para registrar vehículos
     roles_autorizados = [
         1339386615235346439, 
@@ -1435,7 +1438,7 @@ async def slash_registrar_vehiculo(
             description="No tienes permiso para registrar vehículos.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Verificar si el ciudadano tiene cédula y obtener el avatar_url
@@ -1448,7 +1451,7 @@ async def slash_registrar_vehiculo(
                 description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
         rut = cedula['rut']
@@ -1465,7 +1468,7 @@ async def slash_registrar_vehiculo(
             description="La placa debe tener el formato ABC-123 (tres letras mayúsculas, guion, tres números).",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Verificar si la placa ya está registrada
@@ -1478,7 +1481,7 @@ async def slash_registrar_vehiculo(
                 description=f"La placa {placa} ya está registrada en el sistema.",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
     
     finally:
@@ -1493,7 +1496,7 @@ async def slash_registrar_vehiculo(
             description=f"El año debe ser un número entre 1900 y {datetime.now().year + 1}.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Validar archivo de imagen
@@ -1503,7 +1506,7 @@ async def slash_registrar_vehiculo(
             description="Debes subir una imagen válida (JPEG, PNG, etc.).",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Verificar si el código de pago existe y no está usado
@@ -1520,7 +1523,7 @@ async def slash_registrar_vehiculo(
                 description=f"El código de pago {codigo_pago} no existe o no pertenece al ciudadano especificado.",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
         if codigo_pago_data['used']:
@@ -1529,7 +1532,7 @@ async def slash_registrar_vehiculo(
                 description=f"El código de pago {codigo_pago} ya ha sido utilizado previamente.",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
     
     finally:
@@ -1603,7 +1606,7 @@ async def slash_registrar_vehiculo(
             embed.set_thumbnail(url=avatar_url)
             
             # Enviar el registro al canal
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
             
             # Enviar mensaje efímero de confirmación al usuario
             confirmacion_embed = discord.Embed(
@@ -1628,7 +1631,7 @@ async def slash_registrar_vehiculo(
                 description=f"Ocurrió un error al registrar el vehículo: {str(e)}",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
         finally:
@@ -1642,7 +1645,7 @@ async def slash_registrar_vehiculo(
             description="No se pudo conectar a la base de datos. Inténtalo de nuevo más tarde.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
 
 # Comando de barra diagonal para ver vehículo
