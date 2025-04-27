@@ -40,6 +40,14 @@ DB_CONFIG = {
     'port': os.getenv('MYSQLPORT', 3306)
 }
 
+# Validar que todas las variables de entorno estén definidas
+required_db_vars = ['host', 'user', 'password', 'database']
+for key in required_db_vars:
+    if not DB_CONFIG[key]:
+        raise ValueError(f"Variable de entorno para '{key}' no está definida. Asegúrate de que MYSQL{key.upper()} esté configurada.")
+# Convertir el puerto a entero si no es None
+DB_CONFIG['port'] = int(DB_CONFIG['port']) if DB_CONFIG['port'] else 3306
+
 # Helper function to execute MySQL queries with retry logic (synchronous)
 def execute_with_retry(query, params=()):
     for attempt in range(3):
