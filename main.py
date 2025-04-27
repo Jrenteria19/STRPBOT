@@ -2389,7 +2389,7 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, ciudadano: 
     numero_domicilio="Número de domicilio de la propiedad a ver"
 )
 async def slash_ver_propiedad(interaction: discord.Interaction, ciudadano: discord.Member, numero_domicilio: str):
-    if interaction.channel_id != 1344192338397757461:
+    if interaction.channel_id != 1363653559719170159: 
         embed = discord.Embed(
             title="❌ Canal incorrecto",
             description="Este comando solo puede ser utilizado en el canal designado para ver propiedades.",
