@@ -1383,7 +1383,6 @@ async def autocompletar_permiso(
         for estado in ESTADOS_PERMISO if current.lower() in estado.lower()
     ][:25]
 
-# Comando de barra diagonal para registrar vehículo
 @bot.tree.command(name="registrar-vehiculo", description="Registra un vehículo para un ciudadano")
 @app_commands.describe(
     ciudadano="Ciudadano propietario del vehículo",
@@ -1430,13 +1429,7 @@ async def slash_registrar_vehiculo(
     ]
     
     # Verificar si el usuario tiene alguno de los roles autorizados
-    tiene_permiso = False
-    for role in interaction.user.roles:
-        if role.id in roles_autorizados:
-            tiene_permiso = True
-            break
-    
-    if not tiene_permiso:
+    if not any(role.id in roles_autorizados for role in interaction.user.roles):
         embed = discord.Embed(
             title="❌ Sin permisos",
             description="No tienes permiso para registrar vehículos.",
@@ -1530,7 +1523,7 @@ async def slash_registrar_vehiculo(
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
-        if codigo_pago_data['used']:  # Si used == True
+        if codigo_pago_data['used']:
             embed = discord.Embed(
                 title="❌ Código de pago ya usado",
                 description=f"El código de pago {codigo_pago} ya ha sido utilizado previamente.",
@@ -1549,94 +1542,108 @@ async def slash_registrar_vehiculo(
     # Obtener URL de la imagen
     imagen_url = imagen.url
     
-    # Registrar el vehículo y marcar el código como usado
+    # Registrar el vehículo y marcar el código como usado en una transacción
     try:
-        # Registrar el vehículo
-        cursor, conn = execute_with_retry('''
-        INSERT INTO vehiculos 
-        (user_id, placa, modelo, marca, gama, anio, color, revision_tecnica, 
-        permiso_circulacion, codigo_pago, imagen_url, fecha_registro, registrado_por) 
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (str(ciudadano.id), placa, modelo, marca, gama, anio_int, color, 
-              revision_tecnica, permiso_circulacion, codigo_pago, imagen_url, 
-              fecha_registro, str(interaction.user.id)))
-        
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
         try:
+            # Iniciar transacción
+            cursor.execute('START TRANSACTION')
+            
+            # Registrar el vehículo
+            cursor.execute('''
+            INSERT INTO vehiculos 
+            (user_id, placa, modelo, marca, gama, anio, color, revision_tecnica, 
+            permiso_circulacion, codigo_pago, imagen_url, fecha_registro, registrado_por) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (str(ciudadano.id), placa, modelo, marca, gama, anio_int, color, 
+                  revision_tecnica, permiso_circulacion, codigo_pago, imagen_url, 
+                  fecha_registro, str(interaction.user.id)))
+            
             # Marcar el código de pago como usado
-            cursor, conn = execute_with_retry('''
+            cursor.execute('''
             UPDATE payment_codes 
             SET used = %s, used_at = %s 
             WHERE code = %s
             ''', (True, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), codigo_pago))
             
-            try:
-                # Crear y enviar el mensaje embebido con el vehículo registrado
-                embed = discord.Embed(
-                    title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-                    description="REGISTRO CIVIL Y DE VEHÍCULOS",
-                    color=discord.Color.blue()
-                )
-                
-                embed.add_field(name="CERTIFICADO DE REGISTRO VEHICULAR", value=f"Placa: {placa}", inline=False)
-                
-                # Información del vehículo
-                embed.add_field(name="Propietario", value=ciudadano.mention, inline=True)
-                embed.add_field(name="RUT", value=rut, inline=True)
-                embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
-                
-                embed.add_field(name="Marca", value=marca, inline=True)
-                embed.add_field(name="Modelo", value=modelo, inline=True)
-                embed.add_field(name="Año", value=str(anio_int), inline=True)
-                
-                embed.add_field(name="Color", value=color, inline=True)
-                embed.add_field(name="Gama", value=gama, inline=True)
-                embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
-                
-                embed.add_field(name="Revisión Técnica", value=revision_tecnica, inline=True)
-                embed.add_field(name="Permiso de Circulación", value=permiso_circulacion, inline=True)
-                embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
-                
-                # Establecer la imagen del vehículo
-                embed.set_image(url=imagen_url)
-                
-                # Establecer la imagen miniatura como el avatar_url de la cédula
-                embed.set_thumbnail(url=avatar_url)
-                
-                # Enviar el registro al canal
-                await interaction.response.send_message(embed=embed)
-                
-                # Enviar mensaje efímero de confirmación al usuario
-                confirmacion_embed = discord.Embed(
-                    title="✅ ¡Vehículo Registrado con Éxito!",
-                    description=f"El vehículo con placa {placa} ha sido registrado correctamente para {ciudadano.mention}",
-                    color=discord.Color.green()
-                )
-                confirmacion_embed.add_field(
-                    name="📋 Detalles",
-                    value=f"Marca: {marca}\nModelo: {modelo}\nAño: {anio_int}\nColor: {color}\nCódigo de Pago: {codigo_pago}",
-                    inline=False
-                )
-                confirmacion_embed.set_footer(text="Santiago RP - Registro de Vehículos")
-                
-                # Enviar mensaje efímero al usuario
-                await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
+            # Confirmar transacción
+            conn.commit()
             
-            finally:
-                cursor.close()
-                conn.close()
+            # Crear y enviar el mensaje embebido con el vehículo registrado
+            embed = discord.Embed(
+                title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+                description="REGISTRO CIVIL Y DE VEHÍCULOS",
+                color=discord.Color.blue()
+            )
+            
+            embed.add_field(name="CERTIFICADO DE REGISTRO VEHICULAR", value=f"Placa: {placa}", inline=False)
+            
+            # Información del vehículo
+            embed.add_field(name="Propietario", value=ciudadano.mention, inline=True)
+            embed.add_field(name="RUT", value=rut, inline=True)
+            embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
+            
+            embed.add_field(name="Marca", value=marca, inline=True)
+            embed.add_field(name="Modelo", value=modelo, inline=True)
+            embed.add_field(name="Año", value=str(anio_int), inline=True)
+            
+            embed.add_field(name="Color", value=color, inline=True)
+            embed.add_field(name="Gama", value=gama, inline=True)
+            embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
+            
+            embed.add_field(name="Revisión Técnica", value=revision_tecnica, inline=True)
+            embed.add_field(name="Permiso de Circulación", value=permiso_circulacion, inline=True)
+            embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
+            
+            # Establecer la imagen del vehículo
+            embed.set_image(url=imagen_url)
+            
+            # Establecer la imagen miniatura como el avatar_url de la cédula
+            embed.set_thumbnail(url=avatar_url)
+            
+            # Enviar el registro al canal
+            await interaction.response.send_message(embed=embed)
+            
+            # Enviar mensaje efímero de confirmación al usuario
+            confirmacion_embed = discord.Embed(
+                title="✅ ¡Vehículo Registrado con Éxito!",
+                description=f"El vehículo con placa {placa} ha sido registrado correctamente para {ciudadano.mention}.",
+                color=discord.Color.green()
+            )
+            confirmacion_embed.add_field(
+                name="📋 Detalles",
+                value=f"**Marca:** {marca}\n**Modelo:** {modelo}\n**Año:** {anio_int}\n**Color:** {color}\n**Código de Pago:** {codigo_pago}",
+                inline=False
+            )
+            confirmacion_embed.set_footer(text="Santiago RP - Registro de Vehículos")
+            
+            await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
+        
+        except mysql.connector.Error as e:
+            conn.rollback()
+            logger.error(f"Error al registrar vehículo en la base de datos: {e}")
+            embed = discord.Embed(
+                title="❌ Error al registrar vehículo",
+                description=f"Ocurrió un error al registrar el vehículo: {str(e)}",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
         
         finally:
             cursor.close()
             conn.close()
-            
-    except Exception as e:
-        logger.error(f"Error al registrar vehículo: {e}")
+    
+    except mysql.connector.Error as e:
+        logger.error(f"Error al conectar a la base de datos: {e}")
         embed = discord.Embed(
-            title="❌ Error al registrar vehículo",
-            description=f"Ocurrió un error al registrar el vehículo: {e}",
+            title="❌ Error de conexión",
+            description="No se pudo conectar a la base de datos. Inténtalo de nuevo más tarde.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
 
 # Comando de barra diagonal para ver vehículo
 @bot.tree.command(name="ver-vehiculo", description="Muestra la información de un vehículo por su placa")
