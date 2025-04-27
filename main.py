@@ -48,6 +48,15 @@ for key in required_db_vars:
 # Convertir el puerto a entero si no es None
 DB_CONFIG['port'] = int(DB_CONFIG['port']) if DB_CONFIG['port'] else 3306
 
+def get_db_connection():
+    """Establece una conexión a la base de datos MySQL."""
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        return conn
+    except mysql.connector.Error as e:
+        logger.error(f"Error al conectar a la base de datos: {e}")
+        raise
+
 # Helper function to execute MySQL queries with retry logic (synchronous)
 def execute_with_retry(query, params=()):
     conn = None
@@ -58,14 +67,12 @@ def execute_with_retry(query, params=()):
                 conn = mysql.connector.connect(**DB_CONFIG)
                 cursor = conn.cursor(dictionary=True)
                 cursor.execute(query, params)
-                # Si es una consulta de modificación, hacer commit
                 if query.strip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP')):
                     conn.commit()
-                # Devolver el cursor y la conexión para que el llamador maneje los resultados y el cierre
                 return cursor, conn
             except mysql.connector.Error as e:
                 if attempt < 2:
-                    time.sleep(1)  # Pequeña espera antes de reintentar
+                    time.sleep(1)
                     continue
                 logger.error(f"Error al ejecutar la consulta: {e}")
                 raise e
@@ -73,34 +80,28 @@ def execute_with_retry(query, params=()):
         logger.error(f"Error inesperado en execute_with_retry: {e}")
         raise
     finally:
-        # No cerramos el cursor ni la conexión aquí; el llamador se encargará
-        pass
+        pass  # El llamador debe cerrar cursor y conn
 
 def init_db():
-    """Inicializa la base de datos si no existe"""
-    try:
-        # Crear tabla de usuarios
-        cursor = execute_with_retry('''
+    """Inicializa la base de datos si no existe."""
+    tables = [
+        ('''
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             username TEXT NOT NULL,
             points INTEGER DEFAULT 0,
             last_daily TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de configuración del servidor
-        cursor = execute_with_retry('''
+        ''', "users"),
+        ('''
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id BIGINT PRIMARY KEY,
             prefix VARCHAR(10) DEFAULT '!',
             welcome_channel_id BIGINT,
             welcome_message TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de cédulas de identidad
-        cursor = execute_with_retry('''
+        ''', "guild_settings"),
+        ('''
         CREATE TABLE IF NOT EXISTS cedulas (
             user_id BIGINT PRIMARY KEY,
             rut VARCHAR(20) NOT NULL UNIQUE,
@@ -117,10 +118,8 @@ def init_db():
             fecha_vencimiento TEXT NOT NULL,
             avatar_url TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de licencias
-        cursor = execute_with_retry('''
+        ''', "cedulas"),
+        ('''
         CREATE TABLE IF NOT EXISTS licencias (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -131,10 +130,8 @@ def init_db():
             emitida_por BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de vehículos
-        cursor = execute_with_retry('''
+        ''', "licencias"),
+        ('''
         CREATE TABLE IF NOT EXISTS vehiculos (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -152,10 +149,8 @@ def init_db():
             registrado_por BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de códigos de pago
-        cursor = execute_with_retry('''
+        ''', "vehiculos"),
+        ('''
         CREATE TABLE IF NOT EXISTS payment_codes (
             code VARCHAR(50) PRIMARY KEY,
             amount BIGINT UNSIGNED NOT NULL,
@@ -167,10 +162,8 @@ def init_db():
             created_by BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de propiedades
-        cursor = execute_with_retry('''
+        ''', "payment_codes"),
+        ('''
         CREATE TABLE IF NOT EXISTS propiedades (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -184,10 +177,8 @@ def init_db():
             registrado_por BIGINT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de arrestos
-        cursor = execute_with_retry('''
+        ''', "propiedades"),
+        ('''
         CREATE TABLE IF NOT EXISTS arrestos (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -200,10 +191,8 @@ def init_db():
             oficial_id TEXT NOT NULL,
             estado VARCHAR(20) DEFAULT 'Activo'
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de multas
-        cursor = execute_with_retry('''
+        ''', "arrestos"),
+        ('''
         CREATE TABLE IF NOT EXISTS multas (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -215,10 +204,8 @@ def init_db():
             oficial_id TEXT NOT NULL,
             estado VARCHAR(20) DEFAULT 'Pendiente'
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
-
-        # Crear tabla de emergencias
-        cursor = execute_with_retry('''
+        ''', "multas"),
+        ('''
         CREATE TABLE IF NOT EXISTS emergencias (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT,
@@ -228,12 +215,18 @@ def init_db():
             fecha TEXT,
             servicios_notificados TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-        ''')
+        ''', "emergencias")
+    ]
 
-        logger.info("✅ Base de datos inicializada correctamente")
-    except mysql.connector.Error as e:
-        logger.error(f"❌ Error al inicializar la base de datos: {e}")
-        raise
+    for query, table_name in tables:
+        cursor, conn = execute_with_retry(query)
+        try:
+            logger.info(f"Tabla '{table_name}' creada o verificada correctamente")
+        finally:
+            cursor.close()
+            conn.close()
+
+    logger.info("✅ Base de datos inicializada correctamente")
 
 # Definir los tipos de licencias disponibles
 TIPOS_LICENCIAS = {
@@ -273,40 +266,34 @@ ZONAS_PROPIEDAD = ["Quilicura", "La Granja", "Las Condes", "Pudahuel"]
 
 # Función para generar un RUT chileno único y válido
 def generar_rut():
-    while True:
-        # Generar un número aleatorio entre 10.000.000 y 25.000.000
-        num = random.randint(10000000, 25000000)
-        
-        # Calcular dígito verificador
+    """Genera un RUT único."""
+    def calcular_digito_verificador(rut_base):
+        """Calcula el dígito verificador para un RUT."""
+        factores = [2, 3, 4, 5, 6, 7, 2, 3]
         suma = 0
-        multiplicador = 2
-        
-        # Algoritmo para calcular dígito verificador
-        temp = num
-        while temp > 0:
-            suma += (temp % 10) * multiplicador
-            multiplicador = multiplicador + 1 if multiplicador < 7 else 2
-            temp //= 10
-            
-        dv = 11 - (suma % 11)
-        
+        for i, digito in enumerate(str(rut_base)[::-1]):
+            suma += int(digito) * factores[i % len(factores)]
+        resto = suma % 11
+        dv = 11 - resto
         if dv == 11:
-            dv = '0'
-        elif dv == 10:
-            dv = 'K'
-        else:
-            dv = str(dv)
-            
-        rut = f"{num}-{dv}"
-        
-        # Verificar si el RUT ya existe en la base de datos
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT rut FROM cedulas WHERE rut = %s', (rut,))
-        result = cursor.fetchone()
-        
-        if not result:
-            return rut
+            return '0'
+        if dv == 10:
+            return 'K'
+        return str(dv)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        while True:
+            rut_base = random.randint(10000000, 99999999)
+            digito_verificador = calcular_digito_verificador(rut_base)
+            rut = f"{rut_base}-{digito_verificador}"
+            cursor.execute("SELECT rut FROM cedulas WHERE rut = %s", (rut,))
+            if not cursor.fetchone():
+                return rut
+    finally:
+        cursor.close()
+        conn.close()
 
 # Función para validar fecha de nacimiento
 def validar_fecha_nacimiento(fecha_str):
