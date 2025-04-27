@@ -3622,13 +3622,16 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
     await interaction.response.defer(thinking=True)
     
     try:
-        # Verificar cédula del ciudadano
-        cursor, conn = execute_with_retry('''
-        SELECT primer_nombre, apellido_paterno, rut, avatar_url
-        FROM cedulas WHERE user_id = %s
-        ''', (str(ciudadano.id),))
+        # Iniciar conexión a la base de datos
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
         
         try:
+            # Verificar cédula del ciudadano
+            cursor.execute('''
+            SELECT primer_nombre, apellido_paterno, rut, avatar_url
+            FROM cedulas WHERE user_id = %s
+            ''', (str(ciudadano.id),))
             cedula = cursor.fetchone()
             if not cedula:
                 embed = discord.Embed(
@@ -3640,67 +3643,71 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
             
-            nombre, apellido, rut, roblox_avatar = cedula
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Obtener arrestos y multas antes de borrar (para el log)
-        cursor, conn = execute_with_retry('''
-        SELECT id, razon, tiempo_prision, monto_multa, fecha_arresto
-        FROM arrestos WHERE user_id = %s AND estado = 'Activo'
-        ''', (str(ciudadano.id),))
-        
-        try:
+            nombre = cedula['primer_nombre']
+            apellido = cedula['apellido_paterno']
+            rut = cedula['rut']
+            roblox_avatar = cedula['avatar_url']
+            
+            # Validar URL del avatar
+            default_avatar_url = "https://discord.com/assets/1f0bfc0865d324c2587920a7d80c609b.png"
+            avatar_url = None
+            if roblox_avatar and isinstance(roblox_avatar, str) and roblox_avatar.startswith(('http://', 'https://')):
+                avatar_url = roblox_avatar
+            else:
+                try:
+                    avatar_url = ciudadano.display_avatar.url if ciudadano.display_avatar else default_avatar_url
+                except Exception as e:
+                    logger.warning(f"Error al obtener display_avatar.url para el usuario {ciudadano.id}: {str(e)}")
+                    avatar_url = default_avatar_url
+            
+            if not avatar_url:
+                logger.warning(f"No se pudo determinar una URL válida para el thumbnail del usuario {ciudadano.id}")
+                avatar_url = default_avatar_url
+            
+            # Obtener arrestos y multas antes de borrar (para el log)
+            cursor.execute('''
+            SELECT id, razon, tiempo_prision, monto_multa, fecha_arresto
+            FROM arrestos WHERE user_id = %s AND estado = 'Activo'
+            ''', (str(ciudadano.id),))
             arrestos = cursor.fetchall()
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        cursor, conn = execute_with_retry('''
-        SELECT id, razon, monto_multa, fecha_multa
-        FROM multas WHERE user_id = %s AND estado = 'Pendiente'
-        ''', (str(ciudadano.id),))
-        
-        try:
+            
+            cursor.execute('''
+            SELECT id, razon, monto_multa, fecha_multa
+            FROM multas WHERE user_id = %s AND estado = 'Pendiente'
+            ''', (str(ciudadano.id),))
             multas = cursor.fetchall()
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Si no hay antecedentes, mostrar mensaje
-        if not arrestos and not multas:
-            embed = discord.Embed(
-                title="🟢 SIN ANTECEDENTES 🟢",
-                description=f"{ciudadano.mention} no tiene antecedentes penales para borrar.",
-                color=discord.Color.green()
-            )
-            embed.add_field(
-                name="👤 Ciudadano",
-                value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
-                inline=False
-            )
-            embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
-            embed.set_footer(
-                text="Sistema de Justicia - SantiagoRP",
-                icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-            )
-            await interaction.followup.send(embed=embed)
-            return
-        
-        # Borrar arrestos
-        cursor, conn = execute_with_retry('''
-        DELETE FROM arrestos WHERE user_id = %s
-        ''', (str(ciudadano.id),))
-        
-        try:
+            
+            # Si no hay antecedentes, mostrar mensaje
+            if not arrestos and not multas:
+                embed = discord.Embed(
+                    title="🟢 SIN ANTECEDENTES 🟢",
+                    description=f"{ciudadano.mention} no tiene antecedentes penales para borrar.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(
+                    name="👤 Ciudadano",
+                    value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
+                    inline=False
+                )
+                embed.set_thumbnail(url=avatar_url)
+                embed.set_footer(
+                    text="Sistema de Justicia - SantiagoRP",
+                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+                )
+                await interaction.followup.send(embed=embed)
+                return
+            
+            # Borrar arrestos
+            cursor.execute('''
+            DELETE FROM arrestos WHERE user_id = %s
+            ''', (str(ciudadano.id),))
+            
             # Borrar multas
-            cursor, conn = execute_with_retry('''
+            cursor.execute('''
             DELETE FROM multas WHERE user_id = %s
             ''', (str(ciudadano.id),))
+            
+            conn.commit()
             
             # Crear mensaje de confirmación
             embed = discord.Embed(
@@ -3727,7 +3734,7 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                 inline=True
             )
             
-            embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
+            embed.set_thumbnail(url=avatar_url)
             embed.set_footer(
                 text="Sistema de Justicia - SantiagoRP",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
@@ -3761,7 +3768,11 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                 if arrestos:
                     arrestos_texto = ""
                     for arresto in arrestos:
-                        arresto_id, razon, tiempo_prision, monto_multa, fecha_arresto = arresto
+                        arresto_id = arresto['id']
+                        razon = arresto['razon']
+                        tiempo_prision = arresto['tiempo_prision']
+                        monto_multa = arresto['monto_multa']
+                        fecha_arresto = arresto['fecha_arresto']
                         arrestos_texto += (
                             f"**Expediente N° {arresto_id:06d}**\n"
                             f"📜 Delito: {razon}\n"
@@ -3779,7 +3790,10 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                 if multas:
                     multas_texto = ""
                     for multa in multas:
-                        multa_id, razon, monto_multa, fecha_multa = multa
+                        multa_id = multa['id']
+                        razon = multa['razon']
+                        monto_multa = multa['monto_multa']
+                        fecha_multa = multa['fecha_multa']
                         multas_texto += (
                             f"**Multa N° {multa_id:06d}**\n"
                             f"📜 Motivo: {razon}\n"
@@ -3792,7 +3806,7 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                         inline=False
                     )
                 
-                log_embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
+                log_embed.set_thumbnail(url=avatar_url)
                 log_embed.set_footer(
                     text=f"Sistema de Justicia - SantiagoRP",
                     icon_url=interaction.guild.icon.url if interaction.guild.icon else None
@@ -3811,6 +3825,24 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
         embed = discord.Embed(
             title="⚠️ ERROR AL BORRAR ANTECEDENTES ⚠️",
             description=f"Ocurrió un error al borrar los antecedentes: {str(e)}",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.errors.HTTPException as e:
+        logger.error(f"Error al enviar embed en borrar_antecedentes: {str(e)}")
+        embed = discord.Embed(
+            title="⚠️ ERROR AL MOSTRAR CONFIRMACIÓN ⚠️",
+            description="Los antecedentes fueron borrados, pero ocurrió un error al mostrar la confirmación. Por favor, verifica el canal de logs.",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.error(f"Error inesperado en borrar_antecedentes: {str(e)}")
+        embed = discord.Embed(
+            title="⚠️ ERROR INESPERADO ⚠️",
+            description="Ocurrió un error inesperado al procesar el comando. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         embed.set_footer(text="Sistema de Justicia - SantiagoRP")
