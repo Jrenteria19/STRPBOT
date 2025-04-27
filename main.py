@@ -2,7 +2,6 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-import pymysql
 import logging
 from dotenv import load_dotenv
 import datetime
@@ -14,7 +13,7 @@ from datetime import datetime, timedelta
 import uuid
 import threading
 import time
-import pymysql.cursors
+import mysql.connector
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -45,14 +44,14 @@ def get_db_connection():
     global db_connection
     try:
         if db_connection is None or not db_connection.open:
-            db_connection = pymysql.connect(
+            db_connection = mysql.connect(
                 host=DB_HOST,
                 user=DB_USER,
                 password=DB_PASSWORD,
                 database=DB_NAME,
                 port=DB_PORT,
                 charset='utf8mb4',
-                cursorclass=pymysql.cursors.DictCursor,
+                cursorclass=mysql.cursors.DictCursor,
                 autocommit=False,
                 connect_timeout=10,
                 read_timeout=30,
@@ -60,7 +59,7 @@ def get_db_connection():
             )
             logger.info("Conexión a la base de datos establecida")
         return db_connection
-    except pymysql.MySQLError as e:
+    except mysql.MySQLError as e:
         logger.error(f"Error al conectar a la base de datos: {e}")
         raise
 
@@ -74,7 +73,7 @@ def execute_with_retry(query, params=(), max_retries=3, retry_delay=1):
                 cursor.execute(query, params)
                 conn.commit()
                 return cursor
-            except pymysql.OperationalError as e:
+            except mysql.OperationalError as e:
                 if "Lock wait timeout" in str(e) and attempt < max_retries - 1:
                     logger.warning(f"Database locked, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_delay)
@@ -86,7 +85,7 @@ def execute_with_retry(query, params=(), max_retries=3, retry_delay=1):
                 conn.rollback()
                 logger.error(f"Error al ejecutar la consulta: {e}")
                 raise
-    raise pymysql.OperationalError("Database is locked after maximum retries")
+    raise mysql.OperationalError("Database is locked after maximum retries")
 
 def init_db():
     """Inicializa la base de datos si no existe"""
@@ -173,7 +172,7 @@ def init_db():
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS payment_codes (
             code VARCHAR(50) PRIMARY KEY,
-            amount INTEGER NOT NULL,
+            amount BIGINT UNSIGNED NOT NULL,
             description TEXT NOT NULL,
             user_id BIGINT NOT NULL,
             used BOOLEAN DEFAULT FALSE,
