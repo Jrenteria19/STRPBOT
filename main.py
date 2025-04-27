@@ -2988,13 +2988,16 @@ async def slash_arrestar_ciudadano(
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
-        # Verificar cédula del ciudadano
-        cursor, conn = execute_with_retry('''
-        SELECT primer_nombre, apellido_paterno, rut, avatar_url
-        FROM cedulas WHERE user_id = %s
-        ''', (str(detenido.id),))
+        # Iniciar conexión a la base de datos
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
         
         try:
+            # Verificar cédula del ciudadano
+            cursor.execute('''
+            SELECT primer_nombre, apellido_paterno, rut, avatar_url
+            FROM cedulas WHERE user_id = %s
+            ''', (str(detenido.id),))
             cedula = cursor.fetchone()
             if not cedula:
                 embed = discord.Embed(
@@ -3006,34 +3009,25 @@ async def slash_arrestar_ciudadano(
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
             
-            nombre, apellido, rut, roblox_avatar = cedula
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Crear tabla de arrestos si no existe
-        cursor, conn = execute_with_retry('''
-        CREATE TABLE IF NOT EXISTS arrestos (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id VARCHAR(255) NOT NULL,
-            rut VARCHAR(255) NOT NULL,
-            razon TEXT NOT NULL,
-            tiempo_prision VARCHAR(255) NOT NULL,
-            monto_multa INT NOT NULL,
-            foto_url TEXT NOT NULL,
-            fecha_arresto VARCHAR(50) NOT NULL,
-            oficial_id VARCHAR(255) NOT NULL,
-            estado VARCHAR(50) DEFAULT 'Activo'
-        )
-        ''')
-        
-        try:
+            nombre, apellido, rut, roblox_avatar = cedula['primer_nombre'], cedula['apellido_paterno'], cedula['rut'], cedula['avatar_url']
+            
+            # Validar URL del avatar
+            default_avatar_url = "https://discord.com/assets/1f0bfc0865d324c2587920a7d80c609b.png"
+            avatar_url = None
+            if roblox_avatar and isinstance(roblox_avatar, str) and roblox_avatar.startswith(('http://', 'https://')):
+                avatar_url = roblox_avatar
+            else:
+                try:
+                    avatar_url = detenido.display_avatar.url if detenido.display_avatar else default_avatar_url
+                except Exception as e:
+                    logger.warning(f"Error al obtener display_avatar.url para el usuario {detenido.id}: {str(e)}")
+                    avatar_url = default_avatar_url
+            
             # Registrar el arresto
             fecha_arresto = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             foto_url = foto.url
             
-            cursor, conn = execute_with_retry('''
+            cursor.execute('''
             INSERT INTO arrestos (
                 user_id, rut, razon, tiempo_prision, monto_multa, 
                 foto_url, fecha_arresto, oficial_id, estado
@@ -3042,24 +3036,19 @@ async def slash_arrestar_ciudadano(
                 str(detenido.id), rut, razon, tiempo_prision, monto_multa, 
                 foto_url, fecha_arresto, str(interaction.user.id), 'Activo'
             ))
+            conn.commit()
             
             arresto_id = cursor.lastrowid
             
             # Obtener información del oficial
-            cursor, conn = execute_with_retry('''
+            cursor.execute('''
             SELECT primer_nombre, apellido_paterno
             FROM cedulas WHERE user_id = %s
             ''', (str(interaction.user.id),))
-            
-            try:
-                oficial_info = cursor.fetchone()
-                nombre_oficial = "Oficial Desconocido"
-                if oficial_info:
-                    nombre_oficial = f"{oficial_info[0]} {oficial_info[1]}"
-            
-            finally:
-                cursor.close()
-                conn.close()
+            oficial_info = cursor.fetchone()
+            nombre_oficial = "Oficial Desconocido"
+            if oficial_info and 'primer_nombre' in oficial_info and 'apellido_paterno' in oficial_info:
+                nombre_oficial = f"{oficial_info['primer_nombre']} {oficial_info['apellido_paterno']}"
             
             # Determinar la institución del oficial
             institucion = "Funcionario Público"
@@ -3110,7 +3099,7 @@ async def slash_arrestar_ciudadano(
             )
             
             embed_antecedentes.set_image(url=foto_url)
-            embed_antecedentes.set_thumbnail(url=roblox_avatar if roblox_avatar else detenido.display_avatar.url)
+            embed_antecedentes.set_thumbnail(url=avatar_url)
             embed_antecedentes.set_footer(
                 text=f"Sistema Judicial de SantiagoRP • Expediente N° {arresto_id:06d}",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
@@ -3253,6 +3242,15 @@ async def slash_arrestar_ciudadano(
         )
         embed.set_footer(text="Sistema Judicial - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.errors.HTTPException as e:
+        logger.error(f"Error al enviar embed en arrestar_ciudadano: {str(e)}")
+        embed = discord.Embed(
+            title="⚠️ ERROR AL REGISTRAR ARRESTO ⚠️",
+            description="Ocurrió un error al enviar el registro del arresto. Por favor, intenta de nuevo más tarde.",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sistema Judicial - SantiagoRP")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 @bot.tree.command(
     name="multar",
@@ -3324,13 +3322,16 @@ async def slash_multar_ciudadano(
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
-        # Verificar cédula del ciudadano
-        cursor, conn = execute_with_retry('''
-        SELECT primer_nombre, apellido_paterno, rut, avatar_url
-        FROM cedulas WHERE user_id = %s
-        ''', (str(multado.id),))
+        # Iniciar conexión a la base de datos
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
         
         try:
+            # Verificar cédula del ciudadano
+            cursor.execute('''
+            SELECT primer_nombre, apellido_paterno, rut, avatar_url
+            FROM cedulas WHERE user_id = %s
+            ''', (str(multado.id),))
             cedula = cursor.fetchone()
             if not cedula:
                 embed = discord.Embed(
@@ -3342,33 +3343,25 @@ async def slash_multar_ciudadano(
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
             
-            nombre, apellido, rut, roblox_avatar = cedula
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Crear tabla de multas si no existe
-        cursor, conn = execute_with_retry('''
-        CREATE TABLE IF NOT EXISTS multas (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id VARCHAR(255) NOT NULL,
-            rut VARCHAR(255) NOT NULL,
-            razon TEXT NOT NULL,
-            monto_multa INT NOT NULL,
-            foto_url TEXT NOT NULL,
-            fecha_multa VARCHAR(50) NOT NULL,
-            oficial_id VARCHAR(255) NOT NULL,
-            estado VARCHAR(50) DEFAULT 'Pendiente'
-        )
-        ''')
-        
-        try:
+            nombre, apellido, rut, roblox_avatar = cedula['primer_nombre'], cedula['apellido_paterno'], cedula['rut'], cedula['avatar_url']
+            
+            # Validar URL del avatar
+            default_avatar_url = "https://discord.com/assets/1f0bfc0865d324c2587920a7d80c609b.png"
+            avatar_url = None
+            if roblox_avatar and isinstance(roblox_avatar, str) and roblox_avatar.startswith(('http://', 'https://')):
+                avatar_url = roblox_avatar
+            else:
+                try:
+                    avatar_url = multado.display_avatar.url if multado.display_avatar else default_avatar_url
+                except Exception as e:
+                    logger.warning(f"Error al obtener display_avatar.url para el usuario {multado.id}: {str(e)}")
+                    avatar_url = default_avatar_url
+            
             # Registrar la multa
             fecha_multa = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             foto_url = foto.url
             
-            cursor, conn = execute_with_retry('''
+            cursor.execute('''
             INSERT INTO multas (
                 user_id, rut, razon, monto_multa, foto_url, 
                 fecha_multa, oficial_id, estado
@@ -3377,24 +3370,19 @@ async def slash_multar_ciudadano(
                 str(multado.id), rut, razon, monto_multa, foto_url, 
                 fecha_multa, str(interaction.user.id), 'Pendiente'
             ))
+            conn.commit()
             
             multa_id = cursor.lastrowid
             
             # Obtener información del oficial
-            cursor, conn = execute_with_retry('''
+            cursor.execute('''
             SELECT primer_nombre, apellido_paterno
             FROM cedulas WHERE user_id = %s
             ''', (str(interaction.user.id),))
-            
-            try:
-                oficial_info = cursor.fetchone()
-                nombre_oficial = "Oficial Desconocido"
-                if oficial_info:
-                    nombre_oficial = f"{oficial_info[0]} {oficial_info[1]}"
-            
-            finally:
-                cursor.close()
-                conn.close()
+            oficial_info = cursor.fetchone()
+            nombre_oficial = "Oficial Desconocido"
+            if oficial_info and 'primer_nombre' in oficial_info and 'apellido_paterno' in oficial_info:
+                nombre_oficial = f"{oficial_info['primer_nombre']} {oficial_info['apellido_paterno']}"
             
             # Determinar la institución del oficial
             institucion = "Funcionario Público"
@@ -3445,7 +3433,7 @@ async def slash_multar_ciudadano(
             )
             
             embed_multa.set_image(url=foto_url)
-            embed_multa.set_thumbnail(url=roblox_avatar if roblox_avatar else multado.display_avatar.url)
+            embed_multa.set_thumbnail(url=avatar_url)
             embed_multa.set_footer(
                 text=f"Sistema Judicial de SantiagoRP • Multa N° {multa_id:06d}",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
@@ -3584,6 +3572,15 @@ async def slash_multar_ciudadano(
         embed = discord.Embed(
             title="⚠️ ERROR EN EL REGISTRO ⚠️",
             description=f"Ocurrió un error durante el registro de la multa: {str(e)}",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sistema Judicial - SantiagoRP")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.errors.HTTPException as e:
+        logger.error(f"Error al enviar embed en multar_ciudadano: {str(e)}")
+        embed = discord.Embed(
+            title="⚠️ ERROR AL REGISTRAR MULTA ⚠️",
+            description="Ocurrió un error al enviar el registro de la multa. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         embed.set_footer(text="Sistema Judicial - SantiagoRP")
