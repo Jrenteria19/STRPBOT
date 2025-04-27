@@ -724,68 +724,49 @@ async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.
 @bot.tree.command(name="eliminar-cedula", description="Elimina la cédula de identidad de un ciudadano")
 @app_commands.describe(ciudadano="Ciudadano cuya cédula deseas eliminar")
 async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: discord.Member):
-    """Elimina la cédula de identidad de un ciudadano (solo roles autorizados)"""
-    
-    # Lista de roles autorizados
-    roles_autorizados = [
-        1339386615235346439, 
-        1347803116741066834, 
-        1339386615222767662, 
-        1346545514492985486, 
-        1339386615247798362
-    ]
-    
-    # Canal de logs
-    canal_logs_id = 1363767555411542077
-    
-    # Verificar si el usuario tiene alguno de los roles autorizados
-    tiene_permiso = False
-    for role in interaction.user.roles:
-        if role.id in roles_autorizados:
-            tiene_permiso = True
-            break
-    
-    if not tiene_permiso:
-        embed = discord.Embed(
-            title="❌ Sin permisos",
-            description="No tienes permiso para eliminar cédulas de identidad.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Verificar si el ciudadano tiene una cédula
-    cursor, conn = execute_with_retry('''
-    SELECT rut, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno
-    FROM cedulas WHERE user_id = %s
-    ''', (str(ciudadano.id),))
-    
     try:
-        result = cursor.fetchone()
-        
-        if not result:
+        await interaction.response.defer(ephemeral=True)
+        # Lista de roles autorizados
+        roles_autorizados = [
+            1339386615235346439, 
+            1347803116741066834, 
+            1339386615222767662, 
+            1346545514492985486, 
+            1339386615247798362
+        ]
+        canal_logs_id = 1363767555411542077
+        tiene_permiso = any(role.id in roles_autorizados for role in interaction.user.roles)
+        if not tiene_permiso:
             embed = discord.Embed(
-                title="❌ Cédula no encontrada",
-                description=f"{ciudadano.display_name} no tiene una cédula de identidad registrada.",
+                title="❌ Sin permisos",
+                description="No tienes permiso para eliminar cédulas de identidad.",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        
-        # Guardar información para el log
-        rut = result['rut']
-        nombre_completo = f"{result['primer_nombre']} {result['segundo_nombre']} {result['apellido_paterno']} {result['apellido_materno']}"
-    
-    finally:
-        cursor.close()
-        conn.close()
-    
-    # Eliminar la cédula
-    try:
-        cursor, conn = execute_with_retry('DELETE FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
-        
+
+        cursor, conn = execute_with_retry('''
+        SELECT rut, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno
+        FROM cedulas WHERE user_id = %s
+        ''', (str(ciudadano.id),))
         try:
-            # Mensaje de éxito para el usuario
+            result = cursor.fetchone()
+            if not result:
+                embed = discord.Embed(
+                    title="❌ Cédula no encontrada",
+                    description=f"{ciudadano.display_name} no tiene una cédula de identidad registrada.",
+                    color=discord.Color.red()
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+            rut = result['rut']
+            nombre_completo = f"{result['primer_nombre']} {result['segundo_nombre']} {result['apellido_paterno']} {result['apellido_materno']}"
+        finally:
+            cursor.close()
+            conn.close()
+
+        cursor, conn = execute_with_retry('DELETE FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
+        try:
             embed = discord.Embed(
                 title="✅ Cédula Eliminada",
                 description=f"La cédula de identidad de {ciudadano.mention} ha sido eliminada correctamente.",
@@ -797,10 +778,8 @@ async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: dis
                 inline=False
             )
             embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
-            
-            await interaction.response.send_message(embed=embed)
-            
-            # Enviar log al canal de logs
+            await interaction.followup.send(embed=embed, ephemeral=False)
+
             canal_logs = interaction.guild.get_channel(canal_logs_id)
             if canal_logs:
                 log_embed = discord.Embed(
@@ -830,15 +809,12 @@ async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: dis
                     inline=False
                 )
                 log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
-                
                 await canal_logs.send(embed=log_embed)
             else:
                 logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
-        
         finally:
             cursor.close()
             conn.close()
-            
     except Exception as e:
         logger.error(f"Error al eliminar cédula: {e}")
         embed = discord.Embed(
@@ -846,7 +822,10 @@ async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: dis
             description=f"Ocurrió un error al eliminar la cédula: {e}",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # Función para autocompletar tipo de licencia
 async def autocompletar_tipo_licencia(
