@@ -63,11 +63,8 @@ def execute_with_retry(query, params=()):
 def init_db():
     """Inicializa la base de datos si no existe"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         # Crear tabla de usuarios
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             username TEXT NOT NULL,
@@ -75,9 +72,9 @@ def init_db():
             last_daily TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ''')
-        
+
         # Crear tabla de configuración del servidor
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id BIGINT PRIMARY KEY,
             prefix VARCHAR(10) DEFAULT '!',
@@ -85,9 +82,9 @@ def init_db():
             welcome_message TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ''')
-        
+
         # Crear tabla de cédulas de identidad
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS cedulas (
             user_id BIGINT PRIMARY KEY,
             rut VARCHAR(20) NOT NULL UNIQUE,
@@ -107,7 +104,7 @@ def init_db():
         ''')
 
         # Crear tabla de licencias
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS licencias (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -119,9 +116,9 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES cedulas(user_id)
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ''')
-        
+
         # Crear tabla de vehículos
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS vehiculos (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -142,7 +139,7 @@ def init_db():
         ''')
 
         # Crear tabla de códigos de pago
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS payment_codes (
             code VARCHAR(50) PRIMARY KEY,
             amount BIGINT UNSIGNED NOT NULL,
@@ -157,7 +154,7 @@ def init_db():
         ''')
 
         # Crear tabla de propiedades
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS propiedades (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -174,7 +171,7 @@ def init_db():
         ''')
 
         # Crear tabla de arrestos
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS arrestos (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -190,7 +187,7 @@ def init_db():
         ''')
 
         # Crear tabla de multas
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS multas (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -205,7 +202,7 @@ def init_db():
         ''')
 
         # Crear tabla de emergencias
-        cursor.execute('''
+        cursor = execute_with_retry('''
         CREATE TABLE IF NOT EXISTS emergencias (
             id INT AUTO_INCREMENT PRIMARY KEY,
             user_id BIGINT,
@@ -216,6 +213,7 @@ def init_db():
             servicios_notificados TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ''')
+
         logger.info("✅ Base de datos inicializada correctamente")
     except mysql.connector.Error as e:
         logger.error(f"❌ Error al inicializar la base de datos: {e}")
