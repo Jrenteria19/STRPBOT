@@ -477,6 +477,8 @@ async def slash_crear_cedula(
 ):
     """Crea una cédula de identidad para un usuario usando comandos de barra diagonal"""
     
+    await interaction.response.defer()  # <-- Esto permite más tiempo para responder
+    
     # Verificar que el comando se use en el canal correcto
     if interaction.channel_id != 1339386616803885088:
         embed = discord.Embed(
@@ -484,7 +486,7 @@ async def slash_crear_cedula(
             description="Este comando solo puede ser utilizado en el canal designado para cédulas.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Verificar si el usuario ya tiene una cédula
@@ -503,7 +505,7 @@ async def slash_crear_cedula(
                 inline=False
             )
             embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
     finally:
         cursor.close()
@@ -517,7 +519,7 @@ async def slash_crear_cedula(
             description="La fecha de nacimiento debe tener el formato DD-MM-YYYY y la edad debe estar entre 18 y 80 años.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Validar género
@@ -527,7 +529,7 @@ async def slash_crear_cedula(
             description="El género debe ser 'M' o 'F'.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         return
     
     # Obtener avatar de Roblox
@@ -609,7 +611,7 @@ async def slash_crear_cedula(
         
         embed.set_thumbnail(url=avatar_url)
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
     
     except mysql.connector.Error as e:
         embed = discord.Embed(
@@ -617,7 +619,7 @@ async def slash_crear_cedula(
             description="Ocurrió un error al crear tu cédula. Por favor, intenta nuevamente más tarde.",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     
     finally:
         cursor.close()
