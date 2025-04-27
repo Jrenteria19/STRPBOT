@@ -478,7 +478,6 @@ async def on_ready():
     await bot.change_presence(activity=activity)
 
 
-# Comando de barra diagonal para crear cédula
 @bot.tree.command(name="crear-cedula", description="Crea una cédula de identidad para un usuario")
 @app_commands.describe(
     primer_nombre="Primer nombre del usuario",
@@ -515,7 +514,7 @@ async def slash_crear_cedula(
         return
     
     # Verificar si el usuario ya tiene una cédula
-    cursor = await execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(interaction.user.id),))
+    cursor = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(interaction.user.id),))
     cedula_existente = cursor.fetchone()
     
     if cedula_existente:
@@ -566,7 +565,7 @@ async def slash_crear_cedula(
     
     # Guardar en la base de datos
     try:
-        await execute_with_retry('''
+        execute_with_retry('''
         INSERT INTO cedulas (
             user_id, rut, primer_nombre, segundo_nombre, apellido_paterno, 
             apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, 
@@ -664,7 +663,7 @@ async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.
         ciudadano = interaction.user
     
     # Obtener la cédula de la base de datos
-    cursor = await execute_with_retry('''
+    cursor = execute_with_retry('''
     SELECT * FROM cedulas WHERE user_id = %s
     ''', (str(ciudadano.id),))
     
