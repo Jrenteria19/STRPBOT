@@ -515,7 +515,7 @@ async def slash_crear_cedula(
         return
     
     # Verificar si el usuario ya tiene una cédula
-    cursor = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (interaction.user.id,))
+    cursor = await execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(interaction.user.id),))
     cedula_existente = cursor.fetchone()
     
     if cedula_existente:
@@ -561,62 +561,81 @@ async def slash_crear_cedula(
     rut = generar_rut()
     
     # Generar fechas de emisión y vencimiento
-    fecha_emision = datetime.now().strftime("%d-%m-%Y")
-    fecha_vencimiento = (datetime.now() + timedelta(days=365*5)).strftime("%d-%m-%Y")  # 5 años de validez
+    fecha_emision = datetime.now().strftime("%d/%m/%Y")
+    fecha_vencimiento = (datetime.now() + timedelta(days=365*5)).strftime("%d/%m/%Y")  # 5 años de validez
     
     # Guardar en la base de datos
     try:
-        cursor = execute_with_retry('''
+        await execute_with_retry('''
         INSERT INTO cedulas (
             user_id, rut, primer_nombre, segundo_nombre, apellido_paterno, 
             apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, 
             usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (
-            interaction.user.id, rut, primer_nombre, segundo_nombre, apellido_paterno,
-            apellido_materno, fecha_nacimiento, edad, nacionalidad, genero,
+            str(interaction.user.id), rut, primer_nombre, segundo_nombre, apellido_paterno,
+            apellido_materno, fecha_nacimiento, edad, nacionalidad, genero.upper(),
             usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
         ))
         
-        # Crear embed con la información de la cédula
+        # Crear embed con la información de la cédula, siguiendo el formato de la imagen
         embed = discord.Embed(
-            title="✅ Cédula de Identidad Creada",
-            description=f"Se ha creado exitosamente tu cédula de identidad con el RUT: **{rut}**",
-            color=discord.Color.green()
+            title="🇨🇱 SANTIAGO RP 🇨🇱\nSERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN\nCÉDULA DE IDENTIDAD",
+            description=f"**RUT:** {rut}",
+            color=discord.Color.blue()
         )
         
-        embed.add_field(name="Nombre Completo", value=f"{primer_nombre} {segundo_nombre} {apellido_paterno} {apellido_materno}", inline=False)
-        embed.add_field(name="Fecha de Nacimiento", value=fecha_nacimiento, inline=True)
-        embed.add_field(name="Edad", value=str(edad), inline=True)
-        embed.add_field(name="Nacionalidad", value=nacionalidad, inline=True)
-        embed.add_field(name="Género", value="Masculino" if genero == "M" else "Femenino", inline=True)
-        embed.add_field(name="Usuario Roblox", value=usuario_roblox, inline=True)
-        embed.add_field(name="Fecha de Emisión", value=fecha_emision, inline=True)
-        embed.add_field(name="Fecha de Vencimiento", value=fecha_vencimiento, inline=True)
+        embed.add_field(
+            name="Nombres",
+            value=f"{primer_nombre} {segundo_nombre}",
+            inline=True
+        )
+        embed.add_field(
+            name="Apellidos",
+            value=f"{apellido_paterno} {apellido_materno}",
+            inline=True
+        )
+        embed.add_field(
+            name="Nacionalidad",
+            value=nacionalidad,
+            inline=True
+        )
+        embed.add_field(
+            name="Fecha Nacimiento",
+            value=fecha_nacimiento,
+            inline=True
+        )
+        embed.add_field(
+            name="Sexo",
+            value=genero.upper(),
+            inline=True
+        )
+        embed.add_field(
+            name="Edad",
+            value=f"{edad} años",
+            inline=True
+        )
+        embed.add_field(
+            name="Fecha Emisión",
+            value=fecha_emision,
+            inline=True
+        )
+        embed.add_field(
+            name="Fecha Vencimiento",
+            value=fecha_vencimiento,
+            inline=True
+        )
+        embed.add_field(
+            name="Usuario de Roblox",
+            value=usuario_roblox,
+            inline=True
+        )
         
         embed.set_thumbnail(url=avatar_url)
-        embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
         
         await interaction.response.send_message(embed=embed)
         
-        # Enviar mensaje en el canal de registros
-        canal_registros = bot.get_channel(1339386616803885090)  # ID del canal de registros
-        if canal_registros:
-            embed_registro = discord.Embed(
-                title="📋 Nueva Cédula Registrada",
-                description=f"El usuario {interaction.user.mention} ha registrado una nueva cédula de identidad.",
-                color=discord.Color.blue()
-            )
-            embed_registro.add_field(name="RUT", value=rut, inline=True)
-            embed_registro.add_field(name="Nombre", value=f"{primer_nombre} {apellido_paterno}", inline=True)
-            embed_registro.add_field(name="Usuario Roblox", value=usuario_roblox, inline=True)
-            embed_registro.set_thumbnail(url=avatar_url)
-            embed_registro.set_footer(text=f"ID: {interaction.user.id} • {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
-            
-            await canal_registros.send(embed=embed_registro)
-        
-    except Exception as e:
-        logger.error(f"Error al crear cédula: {e}")
+    except mysql.connector.Error as e:
         embed = discord.Embed(
             title="❌ Error",
             description="Ocurrió un error al crear tu cédula. Por favor, intenta nuevamente más tarde.",
@@ -645,9 +664,9 @@ async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.
         ciudadano = interaction.user
     
     # Obtener la cédula de la base de datos
-    cursor = execute_with_retry('''
+    cursor = await execute_with_retry('''
     SELECT * FROM cedulas WHERE user_id = %s
-    ''', (ciudadano.id,))
+    ''', (str(ciudadano.id),))
     
     cedula = cursor.fetchone()
     
@@ -660,28 +679,60 @@ async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    # Crear embed con la información de la cédula
+    # Crear embed con la información de la cédula, siguiendo el formato de la imagen
     embed = discord.Embed(
-        title="🪪 Cédula de Identidad",
+        title="🇨🇱 SANTIAGO RP 🇨🇱\nSERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN\nCÉDULA DE IDENTIDAD",
         description=f"**RUT:** {cedula['rut']}",
         color=discord.Color.blue()
     )
     
     embed.add_field(
-        name="Nombre Completo", 
-        value=f"{cedula['primer_nombre']} {cedula['segundo_nombre']} {cedula['apellido_paterno']} {cedula['apellido_materno']}", 
-        inline=False
+        name="Nombres",
+        value=f"{cedula['primer_nombre']} {cedula['segundo_nombre']}",
+        inline=True
     )
-    embed.add_field(name="Fecha de Nacimiento", value=cedula['fecha_nacimiento'], inline=True)
-    embed.add_field(name="Edad", value=str(cedula['edad']), inline=True)
-    embed.add_field(name="Nacionalidad", value=cedula['nacionalidad'], inline=True)
-    embed.add_field(name="Género", value="Masculino" if cedula['genero'] == "M" else "Femenino", inline=True)
-    embed.add_field(name="Usuario Roblox", value=cedula['usuario_roblox'], inline=True)
-    embed.add_field(name="Fecha de Emisión", value=cedula['fecha_emision'], inline=True)
-    embed.add_field(name="Fecha de Vencimiento", value=cedula['fecha_vencimiento'], inline=True)
+    embed.add_field(
+        name="Apellidos",
+        value=f"{cedula['apellido_paterno']} {cedula['apellido_materno']}",
+        inline=True
+    )
+    embed.add_field(
+        name="Nacionalidad",
+        value=cedula['nacionalidad'],
+        inline=True
+    )
+    embed.add_field(
+        name="Fecha Nacimiento",
+        value=cedula['fecha_nacimiento'],
+        inline=True
+    )
+    embed.add_field(
+        name="Sexo",
+        value=cedula['genero'],
+        inline=True
+    )
+    embed.add_field(
+        name="Edad",
+        value=f"{cedula['edad']} años",
+        inline=True
+    )
+    embed.add_field(
+        name="Fecha Emisión",
+        value=cedula['fecha_emision'],
+        inline=True
+    )
+    embed.add_field(
+        name="Fecha Vencimiento",
+        value=cedula['fecha_vencimiento'],
+        inline=True
+    )
+    embed.add_field(
+        name="Usuario de Roblox",
+        value=cedula['usuario_roblox'],
+        inline=True
+    )
     
     embed.set_thumbnail(url=cedula['avatar_url'])
-    embed.set_footer(text=f"Santiago RP - Sistema de Registro Civil • ID: {ciudadano.id}")
     
     await interaction.response.send_message(embed=embed)
 
