@@ -31,63 +31,34 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Conexión global a la base de datos MySQL de Railway
-DB_HOST = os.getenv("MYSQLHOST", "mysql.railway.internal")
-DB_USER = os.getenv("MYSQLUSER", "root")
-DB_PASSWORD = os.getenv("MYSQLPASSWORD")
-DB_NAME = os.getenv("MYSQL_DATABASE", "railway")
-DB_PORT = int(os.getenv("MYSQLPORT", 3306))
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('MYSQLHOST'),
+    'user': os.getenv('MYSQLUSER'),
+    'password': os.getenv('MYSQLPASSWORD'),
+    'database': os.getenv('MYSQLDATABASE'),
+    'port': os.getenv('MYSQLPORT', 3306)
+}
 
-db_lock = threading.Lock()
-db_connection = None
-
-def get_db_connection():
-    """Obtiene la conexión global a la base de datos MySQL"""
-    global db_connection
-    try:
-        if db_connection is None or not db_connection.open:
-            db_connection = pymysql.connect(
-                host=DB_HOST,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                database=DB_NAME,
-                port=DB_PORT,
-                charset='utf8mb4',
-                cursorclass=pymysql.cursors.DictCursor,
-                autocommit=False,
-                connect_timeout=10,
-                read_timeout=30,
-                write_timeout=30
-            )
-            logger.info("Conexión a la base de datos establecida")
-        return db_connection
-    except pymysql.MySQLError as e:
-        logger.error(f"Error al conectar a la base de datos: {e}")
-        raise
-
-def execute_with_retry(query, params=(), max_retries=3, retry_delay=1):
-    """Ejecuta una consulta SQL con reintentos en caso de bloqueo"""
-    for attempt in range(max_retries):
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            try:
-                cursor.execute(query, params)
+# Helper function to execute MySQL queries with retry logic (synchronous)
+def execute_with_retry(query, params=()):
+    for attempt in range(3):
+        try:
+            conn = mysql.connector.connect(**DB_CONFIG)
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(query, params)
+            if query.strip().upper().startswith('INSERT') or query.strip().upper().startswith('UPDATE') or query.strip().upper().startswith('DELETE'):
                 conn.commit()
-                return cursor
-            except pymysql.OperationalError as e:
-                if "Lock wait timeout" in str(e) and attempt < max_retries - 1:
-                    logger.warning(f"Database locked, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    logger.error(f"Error en la consulta: {e}")
-                    raise
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Error al ejecutar la consulta: {e}")
-                raise
-    raise pymysql.OperationalError("Database is locked after maximum retries")
+            return cursor
+        except mysql.connector.Error as e:
+            if attempt < 2:
+                continue
+            logger.error(f"Error al ejecutar la consulta: {e}")
+            raise e
+        finally:
+            if 'conn' in locals() and conn.is_connected():
+                cursor.close()
+                conn.close()
 
 def init_db():
     """Inicializa la base de datos si no existe"""
@@ -2100,11 +2071,7 @@ async def slash_registrar_propiedad(
     ]
     
     # Verificar si el usuario tiene alguno de los roles autorizados
-    tiene_permiso = False
-    for role in interaction.user.roles:
-        if role.id in roles_autorizados:
-            tiene_permiso = True
-            break
+    tiene_permiso = any(role.id in roles_autorizados for role in interaction.user.roles)
     
     if not tiene_permiso:
         embed = discord.Embed(
@@ -2118,127 +2085,127 @@ async def slash_registrar_propiedad(
     # Diferir la respuesta
     await interaction.response.defer()
     
-    # Verificar si el ciudadano tiene cédula y obtener el avatar_url
-    cursor = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (ciudadano.id,))
-    cedula = cursor.fetchone()
-    
-    if not cedula:
-        embed = discord.Embed(
-            title="❌ Ciudadano sin cédula",
-            description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    rut = cedula['rut']
-    avatar_url = cedula['avatar_url']
-    
-    # Validar número de domicilio
-    if not numero_domicilio.strip():
-        embed = discord.Embed(
-            title="❌ Número de domicilio inválido",
-            description="El número de domicilio no puede estar vacío.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Verificar si el número de domicilio ya está registrado
-    cursor = execute_with_retry('SELECT id FROM propiedades WHERE numero_domicilio = %s', (numero_domicilio,))
-    domicilio_existente = cursor.fetchone()
-    
-    if domicilio_existente:
-        embed = discord.Embed(
-            title="❌ Domicilio ya registrado",
-            description=f"El número de domicilio {numero_domicilio} ya está registrado en el sistema.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Validar zona
-    if zona not in ZONAS_PROPIEDAD:
-        embed = discord.Embed(
-            title="❌ Zona inválida",
-            description=f"La zona debe ser una de las siguientes: {', '.join(ZONAS_PROPIEDAD)}.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Validar color
-    if color not in COLORES_VEHICULO:
-        embed = discord.Embed(
-            title="❌ Color inválido",
-            description=f"El color debe ser uno de los siguientes: {', '.join(COLORES_VEHICULO)}.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Validar número de pisos
-    pisos_validos, pisos_int = validar_numero_pisos(numero_pisos)
-    if not pisos_validos:
-        embed = discord.Embed(
-            title="❌ Número de pisos inválido",
-            description="El número de pisos debe ser un número entero positivo.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Validar archivo de imagen
-    if not imagen.content_type.startswith('image/'):
-        embed = discord.Embed(
-            title="❌ Archivo inválido",
-            description="Debes subir una imagen válida (JPEG, PNG, etc.).",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Verificar si el código de pago existe y no está usado
-    cursor = execute_with_retry('''
-    SELECT code, used FROM payment_codes 
-    WHERE code = %s AND user_id = %s
-    ''', (codigo_pago, ciudadano.id))
-    
-    codigo_pago_data = cursor.fetchone()
-    
-    if not codigo_pago_data:
-        embed = discord.Embed(
-            title="❌ Código de pago inválido",
-            description=f"El código de pago {codigo_pago} no existe o no pertenece al ciudadano especificado.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    if codigo_pago_data['used']:  # Si used == True
-        embed = discord.Embed(
-            title="❌ Código de pago ya usado",
-            description=f"El código de pago {codigo_pago} ya ha sido utilizado previamente.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
-    
-    # Fecha de registro
-    fecha_registro = datetime.now().strftime("%d/%m/%Y")
-    
-    # Obtener URL de la imagen
-    imagen_url = imagen.url
-    
-    # Registrar la propiedad y marcar el código como usado
     try:
+        # Verificar si el ciudadano tiene cédula y obtener el avatar_url
+        cursor = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
+        cedula = cursor.fetchone()
+        
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Ciudadano sin cédula",
+                description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        rut = cedula['rut']
+        avatar_url = cedula['avatar_url']
+        
+        # Validar número de domicilio
+        if not numero_domicilio.strip():
+            embed = discord.Embed(
+                title="❌ Número de domicilio inválido",
+                description="El número de domicilio no puede estar vacío.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Verificar si el número de domicilio ya está registrado
+        cursor = execute_with_retry('SELECT id FROM propiedades WHERE numero_domicilio = %s', (numero_domicilio,))
+        domicilio_existente = cursor.fetchone()
+        
+        if domicilio_existente:
+            embed = discord.Embed(
+                title="❌ Domicilio ya registrado",
+                description=f"El número de domicilio {numero_domicilio} ya está registrado en el sistema.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Validar zona
+        if zona not in ZONAS_PROPIEDAD:
+            embed = discord.Embed(
+                title="❌ Zona inválida",
+                description=f"La zona debe ser una de las siguientes: {', '.join(ZONAS_PROPIEDAD)}.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Validar color
+        if color not in COLORES_VEHICULO:
+            embed = discord.Embed(
+                title="❌ Color inválido",
+                description=f"El color debe ser uno de los siguientes: {', '.join(COLORES_VEHICULO)}.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Validar número de pisos
+        pisos_validos, pisos_int = validar_numero_pisos(numero_pisos)
+        if not pisos_validos:
+            embed = discord.Embed(
+                title="❌ Número de pisos inválido",
+                description="El número de pisos debe ser un número entero positivo.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Validar archivo de imagen
+        if not imagen.content_type.startswith('image/'):
+            embed = discord.Embed(
+                title="❌ Archivo inválido",
+                description="Debes subir una imagen válida (JPEG, PNG, etc.).",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Verificar si el código de pago existe y no está usado
+        cursor = execute_with_retry('''
+        SELECT code, used FROM payment_codes 
+        WHERE code = %s AND user_id = %s
+        ''', (codigo_pago, str(ciudadano.id)))
+        
+        codigo_pago_data = cursor.fetchone()
+        
+        if not codigo_pago_data:
+            embed = discord.Embed(
+                title="❌ Código de pago inválido",
+                description=f"El código de pago {codigo_pago} no existe o no pertenece al ciudadano especificado.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        if codigo_pago_data['used']:
+            embed = discord.Embed(
+                title="❌ Código de pago ya usado",
+                description=f"El código de pago {codigo_pago} ya ha sido utilizado previamente.",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Fecha de registro
+        fecha_registro = datetime.now().strftime("%d/%m/%Y")
+        
+        # Obtener URL de la imagen
+        imagen_url = imagen.url
+        
+        # Registrar la propiedad y marcar el código como usado
         # Registrar la propiedad
         cursor = execute_with_retry('''
         INSERT INTO propiedades 
         (user_id, numero_domicilio, zona, color, numero_pisos, codigo_pago, imagen_url, fecha_registro, registrado_por) 
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (ciudadano.id, numero_domicilio, zona, color, pisos_int, codigo_pago, imagen_url, 
-              fecha_registro, interaction.user.id))
+        ''', (str(ciudadano.id), numero_domicilio, zona, color, pisos_int, codigo_pago, imagen_url, 
+              fecha_registro, str(interaction.user.id)))
         
         # Marcar el código de pago como usado
         cursor = execute_with_retry('''
@@ -2249,7 +2216,7 @@ async def slash_registrar_propiedad(
         
         # Crear y enviar el mensaje embebido con la propiedad registrada
         embed = discord.Embed(
-            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+            title="🇨🇱 SANTIAGO RP 🇨🇱",
             description="REGISTRO CIVIL Y DE PROPIEDADES",
             color=discord.Color.blue()
         )
@@ -2349,16 +2316,16 @@ async def slash_registrar_propiedad(
         else:
             logger.error(f"No se pudo encontrar el canal de logs con ID 1363653392454520963")
             
-    except Exception as e:
+    except mysql.connector.Error as e:
         logger.error(f"Error al registrar propiedad: {e}")
         embed = discord.Embed(
             title="❌ Error al registrar propiedad",
-            description=f"Ocurrió un error al registrar la propiedad: {e}",
+            description="Ocurrió un error al registrar la propiedad. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-
+# Comando de barra diagonal para eliminar propiedad
 @bot.tree.command(name="eliminar-propiedad", description="Elimina el registro de una propiedad")
 @app_commands.describe(numero_domicilio="Número de domicilio de la propiedad a eliminar")
 async def slash_eliminar_propiedad(interaction: discord.Interaction, numero_domicilio: str):
@@ -2377,11 +2344,7 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, numero_domi
     canal_logs_id = 1363652764613480560
     
     # Verificar si el usuario tiene alguno de los roles autorizados
-    tiene_permiso = False
-    for role in interaction.user.roles:
-        if role.id in roles_autorizados:
-            tiene_permiso = True
-            break
+    tiene_permiso = any(role.id in roles_autorizados for role in interaction.user.roles)
     
     if not tiene_permiso:
         embed = discord.Embed(
@@ -2393,18 +2356,14 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, numero_domi
         return
     
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        
         # Verificar si la propiedad existe y obtener información completa
-        query = """
+        cursor = execute_with_retry("""
         SELECT p.user_id, p.zona, p.color, p.numero_pisos, p.codigo_pago, 
                p.imagen_url, p.fecha_registro, c.rut, c.avatar_url
         FROM propiedades p
         JOIN cedulas c ON p.user_id = c.user_id
         WHERE p.numero_domicilio = %s
-        """
-        cursor.execute(query, (numero_domicilio,))
+        """, (numero_domicilio,))
         propiedad = cursor.fetchone()
         
         if not propiedad:
@@ -2416,114 +2375,109 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, numero_domi
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
-        user_id, zona, color, numero_pisos, codigo_pago, imagen_url, fecha_registro, rut, avatar_url = propiedad
+        # Extraer los datos de la propiedad
+        user_id = propiedad['user_id']
+        zona = propiedad['zona']
+        color = propiedad['color']
+        numero_pisos = propiedad['numero_pisos']
+        codigo_pago = propiedad['codigo_pago']
+        imagen_url = propiedad['imagen_url']
+        fecha_registro = propiedad['fecha_registro']
+        rut = propiedad['rut']
+        avatar_url = propiedad['avatar_url']
         
-        propietario = interaction.guild.get_member(user_id)
+        propietario = interaction.guild.get_member(int(user_id))
         propietario_nombre = propietario.mention if propietario else "Desconocido"
         
         # Eliminar la propiedad
-        try:
-            cursor.execute("DELETE FROM propiedades WHERE numero_domicilio = %s", (numero_domicilio,))
-            conn.commit()
-            
-            # Mensaje de éxito para el usuario
-            embed = discord.Embed(
-                title="✅ Propiedad Eliminada",
-                description=f"El registro de la propiedad con número de domicilio {numero_domicilio} ha sido eliminado correctamente.",
-                color=discord.Color.green()
+        cursor = execute_with_retry("DELETE FROM propiedades WHERE numero_domicilio = %s", (numero_domicilio,))
+        
+        # Mensaje de éxito para el usuario
+        embed = discord.Embed(
+            title="✅ Propiedad Eliminada",
+            description=f"El registro de la propiedad con número de domicilio {numero_domicilio} ha sido eliminado correctamente.",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="Información eliminada",
+            value=f"Propietario: {propietario_nombre}\nRUT: {rut}\nZona: {zona}",
+            inline=False
+        )
+        embed.set_footer(text="Santiago RP - Registro de Propiedades")
+        
+        await interaction.response.send_message(embed=embed)
+        
+        # Enviar log al canal de logs
+        canal_logs = interaction.guild.get_channel(canal_logs_id)
+        if canal_logs:
+            log_embed = discord.Embed(
+                title="🗑️ Registro de Propiedad Eliminado",
+                description=f"Se ha eliminado un registro de propiedad del sistema.",
+                color=discord.Color.orange(),
+                timestamp=datetime.now()
             )
-            embed.add_field(
-                name="Información eliminada",
-                value=f"Propietario: {propietario_nombre}\nRUT: {rut}\nZona: {zona}",
-                inline=False
+            log_embed.add_field(
+                name="Administrador",
+                value=f"{interaction.user.mention} ({interaction.user.name})",
+                inline=True
             )
-            embed.set_footer(text="Santiago RP - Registro de Propiedades")
-            
-            await interaction.response.send_message(embed=embed)
-            
-            # Enviar log al canal de logs
-            canal_logs = interaction.guild.get_channel(canal_logs_id)
-            if canal_logs:
-                log_embed = discord.Embed(
-                    title="🗑️ Registro de Propiedad Eliminado",
-                    description=f"Se ha eliminado un registro de propiedad del sistema.",
-                    color=discord.Color.orange(),
-                    timestamp=datetime.now()
-                )
-                log_embed.add_field(
-                    name="Administrador",
-                    value=f"{interaction.user.mention} ({interaction.user.name})",
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Propietario",
-                    value=f"{propietario_nombre} ({propietario.name if propietario else 'Desconocido'})",
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="RUT",
-                    value=rut,
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Número de Domicilio",
-                    value=numero_domicilio,
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Zona",
-                    value=zona,
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Color",
-                    value=color,
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Número de Pisos",
-                    value=str(numero_pisos),
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Código de Pago",
-                    value=codigo_pago,
-                    inline=True
-                )
-                log_embed.add_field(
-                    name="Fecha de Registro",
-                    value=fecha_registro,
-                    inline=True
-                )
-                log_embed.set_thumbnail(url=avatar_url if avatar_url else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png")
-                log_embed.set_footer(text=f"ID del usuario: {user_id}")
-                
-                await canal_logs.send(embed=log_embed)
-            else:
-                logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
-                
-        except Exception as e:
-            logger.error(f"Error al eliminar propiedad: {e}")
-            embed = discord.Embed(
-                title="❌ Error al eliminar propiedad",
-                description=f"Ocurrió un error al eliminar la propiedad: {e}",
-                color=discord.Color.red()
+            log_embed.add_field(
+                name="Propietario",
+                value=f"{propietario_nombre} ({propietario.name if propietario else 'Desconocido'})",
+                inline=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            log_embed.add_field(
+                name="RUT",
+                value=rut,
+                inline=True
+            )
+            log_embed.add_field(
+                name="Número de Domicilio",
+                value=numero_domicilio,
+                inline=True
+            )
+            log_embed.add_field(
+                name="Zona",
+                value=zona,
+                inline=True
+            )
+            log_embed.add_field(
+                name="Color",
+                value=color,
+                inline=True
+            )
+            log_embed.add_field(
+                name="Número de Pisos",
+                value=str(numero_pisos),
+                inline=True
+            )
+            log_embed.add_field(
+                name="Código de Pago",
+                value=codigo_pago,
+                inline=True
+            )
+            log_embed.add_field(
+                name="Fecha de Registro",
+                value=fecha_registro,
+                inline=True
+            )
+            log_embed.set_thumbnail(url=avatar_url if avatar_url else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png")
+            log_embed.set_footer(text=f"ID del usuario: {user_id}")
+            
+            await canal_logs.send(embed=log_embed)
+        else:
+            logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
             
     except mysql.connector.Error as e:
-        logger.error(f"Error de conexión a la base de datos: {e}")
+        logger.error(f"Error al eliminar propiedad: {e}")
         embed = discord.Embed(
-            title="❌ Error de base de datos",
-            description="No se pudo conectar a la base de datos. Por favor, intenta de nuevo más tarde.",
+            title="❌ Error al eliminar propiedad",
+            description="Ocurrió un error al eliminar la propiedad. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
 
+# Comando de barra diagonal para ver propiedad
 @bot.tree.command(name="ver-propiedad", description="Muestra la información de una propiedad por su número de domicilio")
 @app_commands.describe(numero_domicilio="Número de domicilio de la propiedad")
 async def slash_ver_propiedad(interaction: discord.Interaction, numero_domicilio: str):
@@ -2541,18 +2495,14 @@ async def slash_ver_propiedad(interaction: discord.Interaction, numero_domicilio
         return
     
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        
         # Obtener información de la propiedad y el avatar_url de la cédula
-        query = """
+        cursor = execute_with_retry("""
         SELECT p.user_id, p.zona, p.color, p.numero_pisos, p.codigo_pago, 
                p.imagen_url, p.fecha_registro, p.registrado_por, c.rut, c.avatar_url
         FROM propiedades p
         JOIN cedulas c ON p.user_id = c.user_id
         WHERE p.numero_domicilio = %s
-        """
-        cursor.execute(query, (numero_domicilio,))
+        """, (numero_domicilio,))
         propiedad = cursor.fetchone()
         
         if not propiedad:
@@ -2564,18 +2514,28 @@ async def slash_ver_propiedad(interaction: discord.Interaction, numero_domicilio
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
-        user_id, zona, color, numero_pisos, codigo_pago, imagen_url, fecha_registro, registrado_por, rut, avatar_url = propiedad
+        # Extraer los datos de la propiedad
+        user_id = propiedad['user_id']
+        zona = propiedad['zona']
+        color = propiedad['color']
+        numero_pisos = propiedad['numero_pisos']
+        codigo_pago = propiedad['codigo_pago']
+        imagen_url = propiedad['imagen_url']
+        fecha_registro = propiedad['fecha_registro']
+        registrado_por = propiedad['registrado_por']
+        rut = propiedad['rut']
+        avatar_url = propiedad['avatar_url']
         
         # Obtener información del propietario y registrador
-        propietario = interaction.guild.get_member(user_id)
-        registrador = interaction.guild.get_member(registrado_por)
+        propietario = interaction.guild.get_member(int(user_id))
+        registrador = interaction.guild.get_member(int(registrado_por))
         
         propietario_nombre = propietario.mention if propietario else "Desconocido"
         registrador_nombre = registrador.mention if registrador else "Desconocido"
         
         # Crear y enviar el mensaje embebido con la propiedad
         embed = discord.Embed(
-            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+            title="🇨🇱 SANTIAGO RP 🇨🇱",
             description="REGISTRO CIVIL Y DE PROPIEDADES",
             color=discord.Color.blue()
         )
@@ -2603,17 +2563,13 @@ async def slash_ver_propiedad(interaction: discord.Interaction, numero_domicilio
         await interaction.response.send_message(embed=embed)
         
     except mysql.connector.Error as e:
-        logger.error(f"Error de conexión a la base de datos: {e}")
+        logger.error(f"Error al consultar propiedad: {e}")
         embed = discord.Embed(
             title="❌ Error de base de datos",
-            description="No se pudo conectar a la base de datos. Por favor, intenta de nuevo más tarde.",
+            description="No se pudo consultar la propiedad. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
 
 # Function for autocompleting emergency services
 async def autocompletar_servicio(
