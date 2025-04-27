@@ -62,7 +62,7 @@ def execute_with_retry(query, params=()):
 
 def init_db():
     """Inicializa la base de datos si no existe"""
-    with db_lock:
+    try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -216,9 +216,10 @@ def init_db():
             servicios_notificados TEXT
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ''')
-
-        conn.commit()
-        logger.info("Base de datos inicializada")
+        logger.info("✅ Base de datos inicializada correctamente")
+    except mysql.connector.Error as e:
+        logger.error(f"❌ Error al inicializar la base de datos: {e}")
+        raise
 
 # Definir los tipos de licencias disponibles
 TIPOS_LICENCIAS = {
