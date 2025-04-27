@@ -501,23 +501,26 @@ async def slash_crear_cedula(
         return
     
     # Verificar si el usuario ya tiene una cédula
-    cursor = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(interaction.user.id),))
-    cedula_existente = cursor.fetchone()
-    
-    if cedula_existente:
-        embed = discord.Embed(
-            title="❌ Ya tienes una cédula",
-            description=f"Ya tienes una cédula de identidad registrada con el RUT: **{cedula_existente['rut']}**",
-            color=discord.Color.red()
-        )
-        embed.add_field(
-            name="📋 Ver tu Cédula",
-            value=f"Puedes ver tu cédula en cualquier momento usando el comando `/ver-cedula` en el canal <#{1339386616803885089}>",
-            inline=False
-        )
-        embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    cursor, conn = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(interaction.user.id),))
+    try:
+        cedula_existente = cursor.fetchone()
+        if cedula_existente:
+            embed = discord.Embed(
+                title="❌ Ya tienes una cédula",
+                description=f"Ya tienes una cédula de identidad registrada con el RUT: **{cedula_existente['rut']}**",
+                color=discord.Color.red()
+            )
+            embed.add_field(
+                name="📋 Ver tu Cédula",
+                value=f"Puedes ver tu cédula en cualquier momento usando el comando `/ver-cedula` en el canal <#{1339386616803885089}>",
+                inline=False
+            )
+            embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+    finally:
+        cursor.close()
+        conn.close()
     
     # Validar fecha de nacimiento
     fecha_valida, edad = validar_fecha_nacimiento(fecha_nacimiento)
@@ -551,19 +554,19 @@ async def slash_crear_cedula(
     fecha_vencimiento = (datetime.now() + timedelta(days=365*5)).strftime("%d/%m/%Y")  # 5 años de validez
     
     # Guardar en la base de datos
+    cursor, conn = execute_with_retry('''
+    INSERT INTO cedulas (
+        user_id, rut, primer_nombre, segundo_nombre, apellido_paterno, 
+        apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, 
+        usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ''', (
+        str(interaction.user.id), rut, primer_nombre, segundo_nombre, apellido_paterno,
+        apellido_materno, fecha_nacimiento, edad, nacionalidad, genero.upper(),
+        usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
+    ))
+    
     try:
-        execute_with_retry('''
-        INSERT INTO cedulas (
-            user_id, rut, primer_nombre, segundo_nombre, apellido_paterno, 
-            apellido_materno, fecha_nacimiento, edad, nacionalidad, genero, 
-            usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (
-            str(interaction.user.id), rut, primer_nombre, segundo_nombre, apellido_paterno,
-            apellido_materno, fecha_nacimiento, edad, nacionalidad, genero.upper(),
-            usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
-        ))
-        
         # Crear embed con la información de la cédula, siguiendo el formato de la imagen
         embed = discord.Embed(
             title="🇨🇱 SANTIAGO RP 🇨🇱\nSERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN\nCÉDULA DE IDENTIDAD",
@@ -620,7 +623,7 @@ async def slash_crear_cedula(
         embed.set_thumbnail(url=avatar_url)
         
         await interaction.response.send_message(embed=embed)
-        
+    
     except mysql.connector.Error as e:
         embed = discord.Embed(
             title="❌ Error",
@@ -628,6 +631,10 @@ async def slash_crear_cedula(
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    finally:
+        cursor.close()
+        conn.close()
 
 # Comando de barra diagonal para ver cédula
 @bot.tree.command(name="ver-cedula", description="Muestra tu cédula de identidad o la de otro usuario")
@@ -650,79 +657,83 @@ async def slash_ver_cedula(interaction: discord.Interaction, ciudadano: discord.
         ciudadano = interaction.user
     
     # Obtener la cédula de la base de datos
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT * FROM cedulas WHERE user_id = %s
     ''', (str(ciudadano.id),))
     
-    cedula = cursor.fetchone()
-    
-    if not cedula:
+    try:
+        cedula = cursor.fetchone()
+        
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Cédula no encontrada",
+                description=f"No se encontró una cédula registrada para {ciudadano.mention}.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Crear embed con la información de la cédula, siguiendo el formato de la imagen
         embed = discord.Embed(
-            title="❌ Cédula no encontrada",
-            description=f"No se encontró una cédula registrada para {ciudadano.mention}.",
-            color=discord.Color.red()
+            title="🇨🇱 SANTIAGO RP 🇨🇱\nSERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN\nCÉDULA DE IDENTIDAD",
+            description=f"**RUT:** {cedula['rut']}",
+            color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+        
+        embed.add_field(
+            name="Nombres",
+            value=f"{cedula['primer_nombre']} {cedula['segundo_nombre']}",
+            inline=True
+        )
+        embed.add_field(
+            name="Apellidos",
+            value=f"{cedula['apellido_paterno']} {cedula['apellido_materno']}",
+            inline=True
+        )
+        embed.add_field(
+            name="Nacionalidad",
+            value=cedula['nacionalidad'],
+            inline=True
+        )
+        embed.add_field(
+            name="Fecha Nacimiento",
+            value=cedula['fecha_nacimiento'],
+            inline=True
+        )
+        embed.add_field(
+            name="Sexo",
+            value=cedula['genero'],
+            inline=True
+        )
+        embed.add_field(
+            name="Edad",
+            value=f"{cedula['edad']} años",
+            inline=True
+        )
+        embed.add_field(
+            name="Fecha Emisión",
+            value=cedula['fecha_emision'],
+            inline=True
+        )
+        embed.add_field(
+            name="Fecha Vencimiento",
+            value=cedula['fecha_vencimiento'],
+            inline=True
+        )
+        embed.add_field(
+            name="Usuario de Roblox",
+            value=cedula['usuario_roblox'],
+            inline=True
+        )
+        
+        embed.set_thumbnail(url=cedula['avatar_url'])
+        
+        await interaction.response.send_message(embed=embed)
     
-    # Crear embed con la información de la cédula, siguiendo el formato de la imagen
-    embed = discord.Embed(
-        title="🇨🇱 SANTIAGO RP 🇨🇱\nSERVICIO DE REGISTRO CIVIL E IDENTIFICACIÓN\nCÉDULA DE IDENTIDAD",
-        description=f"**RUT:** {cedula['rut']}",
-        color=discord.Color.blue()
-    )
-    
-    embed.add_field(
-        name="Nombres",
-        value=f"{cedula['primer_nombre']} {cedula['segundo_nombre']}",
-        inline=True
-    )
-    embed.add_field(
-        name="Apellidos",
-        value=f"{cedula['apellido_paterno']} {cedula['apellido_materno']}",
-        inline=True
-    )
-    embed.add_field(
-        name="Nacionalidad",
-        value=cedula['nacionalidad'],
-        inline=True
-    )
-    embed.add_field(
-        name="Fecha Nacimiento",
-        value=cedula['fecha_nacimiento'],
-        inline=True
-    )
-    embed.add_field(
-        name="Sexo",
-        value=cedula['genero'],
-        inline=True
-    )
-    embed.add_field(
-        name="Edad",
-        value=f"{cedula['edad']} años",
-        inline=True
-    )
-    embed.add_field(
-        name="Fecha Emisión",
-        value=cedula['fecha_emision'],
-        inline=True
-    )
-    embed.add_field(
-        name="Fecha Vencimiento",
-        value=cedula['fecha_vencimiento'],
-        inline=True
-    )
-    embed.add_field(
-        name="Usuario de Roblox",
-        value=cedula['usuario_roblox'],
-        inline=True
-    )
-    
-    embed.set_thumbnail(url=cedula['avatar_url'])
-    
-    await interaction.response.send_message(embed=embed)
+    finally:
+        cursor.close()
+        conn.close()
 
-# Comando de barra diagonal para eliminar cédula
 @bot.tree.command(name="eliminar-cedula", description="Elimina la cédula de identidad de un ciudadano")
 @app_commands.describe(ciudadano="Ciudadano cuya cédula deseas eliminar")
 async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: discord.Member):
@@ -757,79 +768,89 @@ async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: dis
         return
     
     # Verificar si el ciudadano tiene una cédula
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT rut, primer_nombre, segundo_nombre, apellido_paterno, apellido_materno
     FROM cedulas WHERE user_id = %s
-    ''', (ciudadano.id,))
+    ''', (str(ciudadano.id),))
     
-    result = cursor.fetchone()
+    try:
+        result = cursor.fetchone()
+        
+        if not result:
+            embed = discord.Embed(
+                title="❌ Cédula no encontrada",
+                description=f"{ciudadano.display_name} no tiene una cédula de identidad registrada.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Guardar información para el log
+        rut = result['rut']
+        nombre_completo = f"{result['primer_nombre']} {result['segundo_nombre']} {result['apellido_paterno']} {result['apellido_materno']}"
     
-    if not result:
-        embed = discord.Embed(
-            title="❌ Cédula no encontrada",
-            description=f"{ciudadano.display_name} no tiene una cédula de identidad registrada.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Guardar información para el log
-    rut = result['rut']
-    nombre_completo = f"{result['primer_nombre']} {result['segundo_nombre']} {result['apellido_paterno']} {result['apellido_materno']}"
+    finally:
+        cursor.close()
+        conn.close()
     
     # Eliminar la cédula
     try:
-        cursor = execute_with_retry('DELETE FROM cedulas WHERE user_id = %s', (ciudadano.id,))
+        cursor, conn = execute_with_retry('DELETE FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
         
-        # Mensaje de éxito para el usuario
-        embed = discord.Embed(
-            title="✅ Cédula Eliminada",
-            description=f"La cédula de identidad de {ciudadano.mention} ha sido eliminada correctamente.",
-            color=discord.Color.green()
-        )
-        embed.add_field(
-            name="Información eliminada",
-            value=f"RUT: {rut}\nNombre: {nombre_completo}",
-            inline=False
-        )
-        embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
-        
-        await interaction.response.send_message(embed=embed)
-        
-        # Enviar log al canal de logs
-        canal_logs = interaction.guild.get_channel(canal_logs_id)
-        if canal_logs:
-            log_embed = discord.Embed(
-                title="🗑️ Cédula Eliminada",
-                description=f"Se ha eliminado una cédula de identidad del sistema.",
-                color=discord.Color.orange(),
-                timestamp=datetime.now()
+        try:
+            # Mensaje de éxito para el usuario
+            embed = discord.Embed(
+                title="✅ Cédula Eliminada",
+                description=f"La cédula de identidad de {ciudadano.mention} ha sido eliminada correctamente.",
+                color=discord.Color.green()
             )
-            log_embed.add_field(
-                name="Administrador",
-                value=f"{interaction.user.mention} ({interaction.user.name})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="Ciudadano",
-                value=f"{ciudadano.mention} ({ciudadano.name})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="RUT eliminado",
-                value=rut,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Nombre completo",
-                value=nombre_completo,
+            embed.add_field(
+                name="Información eliminada",
+                value=f"RUT: {rut}\nNombre: {nombre_completo}",
                 inline=False
             )
-            log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
+            embed.set_footer(text="Santiago RP - Sistema de Registro Civil")
             
-            await canal_logs.send(embed=log_embed)
-        else:
-            logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+            await interaction.response.send_message(embed=embed)
+            
+            # Enviar log al canal de logs
+            canal_logs = interaction.guild.get_channel(canal_logs_id)
+            if canal_logs:
+                log_embed = discord.Embed(
+                    title="🗑️ Cédula Eliminada",
+                    description=f"Se ha eliminado una cédula de identidad del sistema.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                log_embed.add_field(
+                    name="Administrador",
+                    value=f"{interaction.user.mention} ({interaction.user.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Ciudadano",
+                    value=f"{ciudadano.mention} ({ciudadano.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="RUT eliminado",
+                    value=rut,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Nombre completo",
+                    value=nombre_completo,
+                    inline=False
+                )
+                log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
+                
+                await canal_logs.send(embed=log_embed)
+            else:
+                logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+        
+        finally:
+            cursor.close()
+            conn.close()
             
     except Exception as e:
         logger.error(f"Error al eliminar cédula: {e}")
@@ -902,31 +923,37 @@ async def slash_tramitar_licencia(
         return
     
     # Verificar si el ciudadano tiene cédula
-    cursor = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (ciudadano.id,))
-    cedula = cursor.fetchone()
-    
-    if not cedula:
-        embed = discord.Embed(
-            title="❌ Ciudadano sin cédula",
-            description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    cursor, conn = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
+    try:
+        cedula = cursor.fetchone()
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Ciudadano sin cédula",
+                description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+    finally:
+        cursor.close()
+        conn.close()
     
     # Verificar si el ciudadano ya tiene la licencia específica que está tramitando
-    cursor = execute_with_retry('SELECT id FROM licencias WHERE user_id = %s AND tipo_licencia = %s', 
-                              (ciudadano.id, tipo_licencia))
-    licencia_existente = cursor.fetchone()
-    
-    if licencia_existente:
-        embed = discord.Embed(
-            title="❌ Licencia ya tramitada",
-            description=f"{ciudadano.mention} ya tiene tramitada la licencia {TIPOS_LICENCIAS[tipo_licencia]['nombre']}.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    cursor, conn = execute_with_retry('SELECT id FROM licencias WHERE user_id = %s AND tipo_licencia = %s', 
+                                     (str(ciudadano.id), tipo_licencia))
+    try:
+        licencia_existente = cursor.fetchone()
+        if licencia_existente:
+            embed = discord.Embed(
+                title="❌ Licencia ya tramitada",
+                description=f"{ciudadano.mention} ya tiene tramitada la licencia {TIPOS_LICENCIAS[tipo_licencia]['nombre']}.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+    finally:
+        cursor.close()
+        conn.close()
     
     # Verificar si el ciudadano tiene el rol requerido
     rol_id = TIPOS_LICENCIAS[tipo_licencia]['rol_id']
@@ -956,50 +983,55 @@ async def slash_tramitar_licencia(
     
     # Guardar la licencia en la base de datos
     try:
-        cursor = execute_with_retry('''
+        cursor, conn = execute_with_retry('''
         INSERT INTO licencias 
         (user_id, tipo_licencia, nombre_licencia, fecha_emision, fecha_vencimiento, emitida_por) 
         VALUES (%s, %s, %s, %s, %s, %s)
-        ''', (ciudadano.id, tipo_licencia, TIPOS_LICENCIAS[tipo_licencia]['nombre'], 
-              fecha_emision, fecha_vencimiento, interaction.user.id))
+        ''', (str(ciudadano.id), tipo_licencia, TIPOS_LICENCIAS[tipo_licencia]['nombre'], 
+              fecha_emision, fecha_vencimiento, str(interaction.user.id)))
         
-        # Crear y enviar el mensaje embebido con la licencia
-        embed = discord.Embed(
-            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-            description="DIRECCIÓN DE TRÁNSITO Y TRANSPORTE PÚBLICO",
-            color=discord.Color.blue()
-        )
+        try:
+            # Crear y enviar el mensaje embebido con la licencia
+            embed = discord.Embed(
+                title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+                description="DIRECCIÓN DE TRÁNSITO Y TRANSPORTE PÚBLICO",
+                color=discord.Color.blue()
+            )
+            
+            embed.add_field(name="LICENCIA DE CONDUCIR", value=f"Tipo: {tipo_licencia}", inline=False)
+            embed.add_field(name="Descripción", value=TIPOS_LICENCIAS[tipo_licencia]['nombre'], inline=False)
+            embed.add_field(name="Titular", value=ciudadano.mention, inline=True)
+            embed.add_field(name="RUT", value=cedula['rut'], inline=True)
+            embed.add_field(name="Fecha Emisión", value=fecha_emision, inline=True)
+            embed.add_field(name="Fecha Vencimiento", value=fecha_vencimiento, inline=True)
+            embed.add_field(name="Emitida por", value=interaction.user.mention, inline=True)
+            
+            # Establecer la imagen del avatar del ciudadano
+            embed.set_thumbnail(url=ciudadano.display_avatar.url)
+            
+            # Enviar la licencia al canal
+            await interaction.response.send_message(embed=embed)
+            
+            # Enviar mensaje efímero de confirmación al usuario
+            confirmacion_embed = discord.Embed(
+                title="✅ ¡Licencia Tramitada con Éxito!",
+                description=f"La licencia {tipo_licencia} ha sido tramitada correctamente para {ciudadano.mention}",
+                color=discord.Color.green()
+            )
+            confirmacion_embed.add_field(
+                name="📋 Detalles",
+                value=f"Tipo: {tipo_licencia} - {TIPOS_LICENCIAS[tipo_licencia]['nombre']}\nVálida hasta: {fecha_vencimiento}",
+                inline=False
+            )
+            confirmacion_embed.set_footer(text="Santiago RP - Dirección de Tránsito")
+            
+            # Enviar mensaje efímero al usuario
+            await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
         
-        embed.add_field(name="LICENCIA DE CONDUCIR", value=f"Tipo: {tipo_licencia}", inline=False)
-        embed.add_field(name="Descripción", value=TIPOS_LICENCIAS[tipo_licencia]['nombre'], inline=False)
-        embed.add_field(name="Titular", value=ciudadano.mention, inline=True)
-        embed.add_field(name="RUT", value=cedula['rut'], inline=True)
-        embed.add_field(name="Fecha Emisión", value=fecha_emision, inline=True)
-        embed.add_field(name="Fecha Vencimiento", value=fecha_vencimiento, inline=True)
-        embed.add_field(name="Emitida por", value=interaction.user.mention, inline=True)
-        
-        # Establecer la imagen del avatar del ciudadano
-        embed.set_thumbnail(url=ciudadano.display_avatar.url)
-        
-        # Enviar la licencia al canal
-        await interaction.response.send_message(embed=embed)
-        
-        # Enviar mensaje efímero de confirmación al usuario
-        confirmacion_embed = discord.Embed(
-            title="✅ ¡Licencia Tramitada con Éxito!",
-            description=f"La licencia {tipo_licencia} ha sido tramitada correctamente para {ciudadano.mention}",
-            color=discord.Color.green()
-        )
-        confirmacion_embed.add_field(
-            name="📋 Detalles",
-            value=f"Tipo: {tipo_licencia} - {TIPOS_LICENCIAS[tipo_licencia]['nombre']}\nVálida hasta: {fecha_vencimiento}",
-            inline=False
-        )
-        confirmacion_embed.set_footer(text="Santiago RP - Dirección de Tránsito")
-        
-        # Enviar mensaje efímero al usuario
-        await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
-        
+        finally:
+            cursor.close()
+            conn.close()
+            
     except Exception as e:
         logger.error(f"Error al tramitar licencia: {e}")
         embed = discord.Embed(
@@ -1044,71 +1076,79 @@ async def slash_ver_licencia(
         return
     
     # Verificar si el ciudadano tiene cédula y obtener su información
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT rut, avatar_url 
     FROM cedulas WHERE user_id = %s
-    ''', (ciudadano.id,))
+    ''', (str(ciudadano.id),))
     
-    cedula = cursor.fetchone()
+    try:
+        cedula = cursor.fetchone()
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Ciudadano sin cédula",
+                description=f"{ciudadano.mention} no tiene una cédula de identidad registrada.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        rut = cedula['rut']
+        avatar_url = cedula['avatar_url']
     
-    if not cedula:
-        embed = discord.Embed(
-            title="❌ Ciudadano sin cédula",
-            description=f"{ciudadano.mention} no tiene una cédula de identidad registrada.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    rut = cedula['rut']
-    avatar_url = cedula['avatar_url']
+    finally:
+        cursor.close()
+        conn.close()
     
     # Obtener la licencia específica del ciudadano
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT nombre_licencia, fecha_emision, fecha_vencimiento, emitida_por
     FROM licencias 
     WHERE user_id = %s AND tipo_licencia = %s
-    ''', (ciudadano.id, tipo_licencia))
+    ''', (str(ciudadano.id), tipo_licencia))
     
-    licencia = cursor.fetchone()
-    
-    if not licencia:
+    try:
+        licencia = cursor.fetchone()
+        if not licencia:
+            embed = discord.Embed(
+                title="❌ Licencia no encontrada",
+                description=f"{ciudadano.mention} no tiene la licencia tipo {tipo_licencia} tramitada.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        nombre_licencia = licencia['nombre_licencia']
+        fecha_emision = licencia['fecha_emision']
+        fecha_vencimiento = licencia['fecha_vencimiento']
+        emitida_por = licencia['emitida_por']
+        
+        # Obtener el nombre del emisor si está disponible
+        emisor = interaction.guild.get_member(int(emitida_por))
+        emisor_nombre = emisor.mention if emisor else "Desconocido"
+        
+        # Crear y enviar el mensaje embebido con la licencia
         embed = discord.Embed(
-            title="❌ Licencia no encontrada",
-            description=f"{ciudadano.mention} no tiene la licencia tipo {tipo_licencia} tramitada.",
-            color=discord.Color.red()
+            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+            description="DIRECCIÓN DE TRÁNSITO Y TRANSPORTE PÚBLICO",
+            color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+        
+        embed.add_field(name="LICENCIA DE CONDUCIR", value=f"Tipo: {tipo_licencia}", inline=False)
+        embed.add_field(name="Descripción", value=nombre_licencia, inline=False)
+        embed.add_field(name="Titular", value=ciudadano.mention, inline=True)
+        embed.add_field(name="RUT", value=rut, inline=True)
+        embed.add_field(name="Fecha Emisión", value=fecha_emision, inline=True)
+        embed.add_field(name="Fecha Vencimiento", value=fecha_vencimiento, inline=True)
+        embed.add_field(name="Emitida por", value=emisor_nombre, inline=True)
+        
+        # Establecer la imagen del avatar de la cédula en lugar del avatar de Discord
+        embed.set_thumbnail(url=avatar_url)
+        
+        await interaction.response.send_message(embed=embed)
     
-    nombre_licencia = licencia['nombre_licencia']
-    fecha_emision = licencia['fecha_emision']
-    fecha_vencimiento = licencia['fecha_vencimiento']
-    emitida_por = licencia['emitida_por']
-    
-    # Obtener el nombre del emisor si está disponible
-    emisor = interaction.guild.get_member(emitida_por)
-    emisor_nombre = emisor.mention if emisor else "Desconocido"
-    
-    # Crear y enviar el mensaje embebido con la licencia
-    embed = discord.Embed(
-        title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-        description="DIRECCIÓN DE TRÁNSITO Y TRANSPORTE PÚBLICO",
-        color=discord.Color.blue()
-    )
-    
-    embed.add_field(name="LICENCIA DE CONDUCIR", value=f"Tipo: {tipo_licencia}", inline=False)
-    embed.add_field(name="Descripción", value=nombre_licencia, inline=False)
-    embed.add_field(name="Titular", value=ciudadano.mention, inline=True)
-    embed.add_field(name="RUT", value=rut, inline=True)
-    embed.add_field(name="Fecha Emisión", value=fecha_emision, inline=True)
-    embed.add_field(name="Fecha Vencimiento", value=fecha_vencimiento, inline=True)
-    embed.add_field(name="Emitida por", value=emisor_nombre, inline=True)
-    
-    # Establecer la imagen del avatar de la cédula en lugar del avatar de Discord
-    embed.set_thumbnail(url=avatar_url)
-    
-    await interaction.response.send_message(embed=embed)
+    finally:
+        cursor.close()
+        conn.close()
 
 # Comando de barra diagonal para revocar licencia
 @bot.tree.command(name="revocar-licencia", description="Revoca una licencia específica de un ciudadano")
@@ -1165,102 +1205,116 @@ async def slash_revocar_licencia(
         return
     
     # Verificar si el ciudadano tiene la licencia específica
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT id, nombre_licencia, fecha_emision FROM licencias 
     WHERE user_id = %s AND tipo_licencia = %s
-    ''', (ciudadano.id, tipo_licencia))
+    ''', (str(ciudadano.id), tipo_licencia))
     
-    licencia = cursor.fetchone()
+    try:
+        licencia = cursor.fetchone()
+        if not licencia:
+            embed = discord.Embed(
+                title="❌ Licencia no encontrada",
+                description=f"{ciudadano.mention} no tiene la licencia {tipo_licencia} para revocar.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Guardar información de la licencia para el mensaje
+        licencia_id = licencia['id']
+        nombre_licencia = licencia['nombre_licencia']
+        fecha_emision = licencia['fecha_emision']
     
-    if not licencia:
-        embed = discord.Embed(
-            title="❌ Licencia no encontrada",
-            description=f"{ciudadano.mention} no tiene la licencia {tipo_licencia} para revocar.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Guardar información de la licencia para el mensaje
-    licencia_id = licencia['id']
-    nombre_licencia = licencia['nombre_licencia']
-    fecha_emision = licencia['fecha_emision']
+    finally:
+        cursor.close()
+        conn.close()
     
     # Obtener información de la cédula para el log
-    cursor = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (ciudadano.id,))
-    cedula = cursor.fetchone()
-    rut = cedula['rut'] if cedula else "No disponible"
+    cursor, conn = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
+    try:
+        cedula = cursor.fetchone()
+        rut = cedula['rut'] if cedula else "No disponible"
+    
+    finally:
+        cursor.close()
+        conn.close()
     
     # Eliminar la licencia
     try:
-        cursor = execute_with_retry('DELETE FROM licencias WHERE id = %s', (licencia_id,))
+        cursor, conn = execute_with_retry('DELETE FROM licencias WHERE id = %s', (licencia_id,))
         
-        # Crear y enviar el mensaje de revocación
-        embed = discord.Embed(
-            title=f"🚫 LICENCIA REVOCADA",
-            description=f"Se ha revocado la licencia de {ciudadano.mention}",
-            color=discord.Color.red()
-        )
-        
-        embed.add_field(name="Tipo de licencia", value=f"{tipo_licencia} - {nombre_licencia}", inline=False)
-        embed.add_field(name="Motivo de revocación", value=motivo, inline=False)
-        embed.add_field(name="Autoridad", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Fecha", value=datetime.now().strftime("%d/%m/%Y"), inline=True)
-        
-        # Establecer la imagen del avatar del ciudadano
-        embed.set_thumbnail(url=ciudadano.display_avatar.url)
-        
-        await interaction.response.send_message(embed=embed)
-        
-        # Enviar log al canal de logs
-        canal_logs = interaction.guild.get_channel(canal_logs_id)
-        if canal_logs:
-            log_embed = discord.Embed(
-                title="🚫 Licencia Revocada",
-                description=f"Se ha revocado una licencia del sistema.",
-                color=discord.Color.red(),
-                timestamp=datetime.now()
+        try:
+            # Crear y enviar el mensaje de revocación
+            embed = discord.Embed(
+                title=f"🚫 LICENCIA REVOCADA",
+                description=f"Se ha revocado la licencia de {ciudadano.mention}",
+                color=discord.Color.red()
             )
-            log_embed.add_field(
-                name="Administrador",
-                value=f"{interaction.user.mention} ({interaction.user.name})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="Ciudadano",
-                value=f"{ciudadano.mention} ({ciudadano.name})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="RUT",
-                value=rut,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Licencia revocada",
-                value=f"{tipo_licencia} - {nombre_licencia}",
-                inline=False
-            )
-            log_embed.add_field(
-                name="Fecha de emisión",
-                value=fecha_emision,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Fecha de revocación",
-                value=datetime.now().strftime("%d/%m/%Y"),
-                inline=True
-            )
-            log_embed.add_field(
-                name="Motivo",
-                value=motivo,
-                inline=False
-            )
-            log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
             
-            await canal_logs.send(embed=log_embed)
-        else:
-            logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+            embed.add_field(name="Tipo de licencia", value=f"{tipo_licencia} - {nombre_licencia}", inline=False)
+            embed.add_field(name="Motivo de revocación", value=motivo, inline=False)
+            embed.add_field(name="Autoridad", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Fecha", value=datetime.now().strftime("%d/%m/%Y"), inline=True)
+            
+            # Establecer la imagen del avatar del ciudadano
+            embed.set_thumbnail(url=ciudadano.display_avatar.url)
+            
+            await interaction.response.send_message(embed=embed)
+            
+            # Enviar log al canal de logs
+            canal_logs = interaction.guild.get_channel(canal_logs_id)
+            if canal_logs:
+                log_embed = discord.Embed(
+                    title="🚫 Licencia Revocada",
+                    description=f"Se ha revocado una licencia del sistema.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now()
+                )
+                log_embed.add_field(
+                    name="Administrador",
+                    value=f"{interaction.user.mention} ({interaction.user.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Ciudadano",
+                    value=f"{ciudadano.mention} ({ciudadano.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="RUT",
+                    value=rut,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Licencia revocada",
+                    value=f"{tipo_licencia} - {nombre_licencia}",
+                    inline=False
+                )
+                log_embed.add_field(
+                    name="Fecha de emisión",
+                    value=fecha_emision,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Fecha de revocación",
+                    value=datetime.now().strftime("%d/%m/%Y"),
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Motivo",
+                    value=motivo,
+                    inline=False
+                )
+                log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
+                
+                await canal_logs.send(embed=log_embed)
+            else:
+                logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+        
+        finally:
+            cursor.close()
+            conn.close()
             
     except Exception as e:
         logger.error(f"Error al revocar licencia: {e}")
@@ -1392,20 +1446,24 @@ async def slash_registrar_vehiculo(
         return
     
     # Verificar si el ciudadano tiene cédula y obtener el avatar_url
-    cursor = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (ciudadano.id,))
-    cedula = cursor.fetchone()
+    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
+    try:
+        cedula = cursor.fetchone()
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Ciudadano sin cédula",
+                description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        rut = cedula['rut']
+        avatar_url = cedula['avatar_url']
     
-    if not cedula:
-        embed = discord.Embed(
-            title="❌ Ciudadano sin cédula",
-            description=f"{ciudadano.mention} no tiene una cédula de identidad registrada. Debe tramitar su cédula primero.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    rut = cedula['rut']
-    avatar_url = cedula['avatar_url']
+    finally:
+        cursor.close()
+        conn.close()
     
     # Validar formato de placa
     if not validar_placa(placa):
@@ -1418,17 +1476,21 @@ async def slash_registrar_vehiculo(
         return
     
     # Verificar si la placa ya está registrada
-    cursor = execute_with_retry('SELECT id FROM vehiculos WHERE placa = %s', (placa,))
-    placa_existente = cursor.fetchone()
+    cursor, conn = execute_with_retry('SELECT id FROM vehiculos WHERE placa = %s', (placa,))
+    try:
+        placa_existente = cursor.fetchone()
+        if placa_existente:
+            embed = discord.Embed(
+                title="❌ Placa ya registrada",
+                description=f"La placa {placa} ya está registrada en el sistema.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
     
-    if placa_existente:
-        embed = discord.Embed(
-            title="❌ Placa ya registrada",
-            description=f"La placa {placa} ya está registrada en el sistema.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    finally:
+        cursor.close()
+        conn.close()
     
     # Validar año del vehículo
     anio_valido, anio_int = validar_anio(año)
@@ -1452,30 +1514,34 @@ async def slash_registrar_vehiculo(
         return
     
     # Verificar si el código de pago existe y no está usado
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT code, used FROM payment_codes 
     WHERE code = %s AND user_id = %s
-    ''', (codigo_pago, ciudadano.id))
+    ''', (codigo_pago, str(ciudadano.id)))
     
-    codigo_pago_data = cursor.fetchone()
+    try:
+        codigo_pago_data = cursor.fetchone()
+        if not codigo_pago_data:
+            embed = discord.Embed(
+                title="❌ Código de pago inválido",
+                description=f"El código de pago {codigo_pago} no existe o no pertenece al ciudadano especificado.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        if codigo_pago_data['used']:  # Si used == True
+            embed = discord.Embed(
+                title="❌ Código de pago ya usado",
+                description=f"El código de pago {codigo_pago} ya ha sido utilizado previamente.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
     
-    if not codigo_pago_data:
-        embed = discord.Embed(
-            title="❌ Código de pago inválido",
-            description=f"El código de pago {codigo_pago} no existe o no pertenece al ciudadano especificado.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    if codigo_pago_data['used']:  # Si used == True
-        embed = discord.Embed(
-            title="❌ Código de pago ya usado",
-            description=f"El código de pago {codigo_pago} ya ha sido utilizado previamente.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    finally:
+        cursor.close()
+        conn.close()
     
     # Fecha de registro
     fecha_registro = datetime.now().strftime("%d/%m/%Y")
@@ -1486,76 +1552,86 @@ async def slash_registrar_vehiculo(
     # Registrar el vehículo y marcar el código como usado
     try:
         # Registrar el vehículo
-        cursor = execute_with_retry('''
+        cursor, conn = execute_with_retry('''
         INSERT INTO vehiculos 
         (user_id, placa, modelo, marca, gama, anio, color, revision_tecnica, 
         permiso_circulacion, codigo_pago, imagen_url, fecha_registro, registrado_por) 
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (ciudadano.id, placa, modelo, marca, gama, anio_int, color, 
+        ''', (str(ciudadano.id), placa, modelo, marca, gama, anio_int, color, 
               revision_tecnica, permiso_circulacion, codigo_pago, imagen_url, 
-              fecha_registro, interaction.user.id))
+              fecha_registro, str(interaction.user.id)))
         
-        # Marcar el código de pago como usado
-        cursor = execute_with_retry('''
-        UPDATE payment_codes 
-        SET used = %s, used_at = %s 
-        WHERE code = %s
-        ''', (True, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), codigo_pago))
+        try:
+            # Marcar el código de pago como usado
+            cursor, conn = execute_with_retry('''
+            UPDATE payment_codes 
+            SET used = %s, used_at = %s 
+            WHERE code = %s
+            ''', (True, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), codigo_pago))
+            
+            try:
+                # Crear y enviar el mensaje embebido con el vehículo registrado
+                embed = discord.Embed(
+                    title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+                    description="REGISTRO CIVIL Y DE VEHÍCULOS",
+                    color=discord.Color.blue()
+                )
+                
+                embed.add_field(name="CERTIFICADO DE REGISTRO VEHICULAR", value=f"Placa: {placa}", inline=False)
+                
+                # Información del vehículo
+                embed.add_field(name="Propietario", value=ciudadano.mention, inline=True)
+                embed.add_field(name="RUT", value=rut, inline=True)
+                embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
+                
+                embed.add_field(name="Marca", value=marca, inline=True)
+                embed.add_field(name="Modelo", value=modelo, inline=True)
+                embed.add_field(name="Año", value=str(anio_int), inline=True)
+                
+                embed.add_field(name="Color", value=color, inline=True)
+                embed.add_field(name="Gama", value=gama, inline=True)
+                embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
+                
+                embed.add_field(name="Revisión Técnica", value=revision_tecnica, inline=True)
+                embed.add_field(name="Permiso de Circulación", value=permiso_circulacion, inline=True)
+                embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
+                
+                # Establecer la imagen del vehículo
+                embed.set_image(url=imagen_url)
+                
+                # Establecer la imagen miniatura como el avatar_url de la cédula
+                embed.set_thumbnail(url=avatar_url)
+                
+                # Enviar el registro al canal
+                await interaction.response.send_message(embed=embed)
+                
+                # Enviar mensaje efímero de confirmación al usuario
+                confirmacion_embed = discord.Embed(
+                    title="✅ ¡Vehículo Registrado con Éxito!",
+                    description=f"El vehículo con placa {placa} ha sido registrado correctamente para {ciudadano.mention}",
+                    color=discord.Color.green()
+                )
+                confirmacion_embed.add_field(
+                    name="📋 Detalles",
+                    value=f"Marca: {marca}\nModelo: {modelo}\nAño: {anio_int}\nColor: {color}\nCódigo de Pago: {codigo_pago}",
+                    inline=False
+                )
+                confirmacion_embed.set_footer(text="Santiago RP - Registro de Vehículos")
+                
+                # Enviar mensaje efímero al usuario
+                await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
+            
+            finally:
+                cursor.close()
+                conn.close()
         
-        # Crear y enviar el mensaje embebido con el vehículo registrado
-        embed = discord.Embed(
-            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-            description="REGISTRO CIVIL Y DE VEHÍCULOS",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(name="CERTIFICADO DE REGISTRO VEHICULAR", value=f"Placa: {placa}", inline=False)
-        
-        # Información del vehículo
-        embed.add_field(name="Propietario", value=ciudadano.mention, inline=True)
-        embed.add_field(name="RUT", value=rut, inline=True)
-        embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
-        
-        embed.add_field(name="Marca", value=marca, inline=True)
-        embed.add_field(name="Modelo", value=modelo, inline=True)
-        embed.add_field(name="Año", value=str(anio_int), inline=True)
-        
-        embed.add_field(name="Color", value=color, inline=True)
-        embed.add_field(name="Gama", value=gama, inline=True)
-        embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
-        
-        embed.add_field(name="Revisión Técnica", value=revision_tecnica, inline=True)
-        embed.add_field(name="Permiso de Circulación", value=permiso_circulacion, inline=True)
-        embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
-        
-        # Establecer la imagen del vehículo
-        embed.set_image(url=imagen_url)
-        
-        # Establecer la imagen miniatura como el avatar_url de la cédula
-        embed.set_thumbnail(url=avatar_url)
-        
-        # Enviar el registro al canal
-        await interaction.response.send_message(embed=embed)
-        
-        # Enviar mensaje efímero de confirmación al usuario
-        confirmacion_embed = discord.Embed(
-            title="✅ ¡Vehículo Registrado con Éxito!",
-            description=f"El vehículo con placa {placa} ha sido registrado correctamente para {ciudadano.mention}",
-            color=discord.Color.green()
-        )
-        confirmacion_embed.add_field(
-            name="📋 Detalles",
-            value=f"Marca: {marca}\nModelo: {modelo}\nAño: {anio_int}\nColor: {color}\nCódigo de Pago: {codigo_pago}",
-            inline=False
-        )
-        confirmacion_embed.set_footer(text="Santiago RP - Registro de Vehículos")
-        
-        # Enviar mensaje efímero al usuario
-        await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
-        
+        finally:
+            cursor.close()
+            conn.close()
+            
     except Exception as e:
         logger.error(f"Error al registrar vehículo: {e}")
-        embed = docker.Embed(
+        embed = discord.Embed(
             title="❌ Error al registrar vehículo",
             description=f"Ocurrió un error al registrar el vehículo: {e}",
             color=discord.Color.red()
@@ -1590,7 +1666,7 @@ async def slash_ver_vehiculo(interaction: discord.Interaction, placa: str):
         return
     
     # Obtener información del vehículo y el avatar_url de la cédula
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT v.user_id, v.modelo, v.marca, v.gama, v.anio, v.color, 
            v.revision_tecnica, v.permiso_circulacion, v.codigo_pago, 
            v.imagen_url, v.fecha_registro, v.registrado_por,
@@ -1600,72 +1676,76 @@ async def slash_ver_vehiculo(interaction: discord.Interaction, placa: str):
     WHERE v.placa = %s
     ''', (placa,))
     
-    vehiculo = cursor.fetchone()
-    
-    if not vehiculo:
+    try:
+        vehiculo = cursor.fetchone()
+        if not vehiculo:
+            embed = discord.Embed(
+                title="❌ Vehículo no encontrado",
+                description=f"No se encontró ningún vehículo con la placa {placa}.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        user_id = vehiculo['user_id']
+        modelo = vehiculo['modelo']
+        marca = vehiculo['marca']
+        gama = vehiculo['gama']
+        anio = vehiculo['anio']
+        color = vehiculo['color']
+        revision_tecnica = vehiculo['revision_tecnica']
+        permiso_circulacion = vehiculo['permiso_circulacion']
+        codigo_pago = vehiculo['codigo_pago']
+        imagen_url = vehiculo['imagen_url']
+        fecha_registro = vehiculo['fecha_registro']
+        registrado_por = vehiculo['registrado_por']
+        rut = vehiculo['rut']
+        avatar_url = vehiculo['avatar_url']
+        
+        # Obtener información del propietario y registrador
+        propietario = interaction.guild.get_member(int(user_id))
+        registrador = interaction.guild.get_member(int(registrado_por))
+        
+        propietario_nombre = propietario.mention if propietario else "Desconocido"
+        registrador_nombre = registrador.mention if registrador else "Desconocido"
+        
+        # Crear y enviar el mensaje embebido con el vehículo
         embed = discord.Embed(
-            title="❌ Vehículo no encontrado",
-            description=f"No se encontró ningún vehículo con la placa {placa}.",
-            color=discord.Color.red()
+            title=f"🇨🇱 SANTIAGO RP 🇨🇱",
+            description="REGISTRO CIVIL Y DE VEHÍCULOS",
+            color=discord.Color.blue()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+        
+        embed.add_field(name="CERTIFICADO DE REGISTRO VEHICULAR", value=f"Placa: {placa}", inline=False)
+        
+        # Información del vehículo
+        embed.add_field(name="Propietario", value=propietario_nombre, inline=True)
+        embed.add_field(name="RUT", value=rut, inline=True)
+        embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
+        
+        embed.add_field(name="Marca", value=marca, inline=True)
+        embed.add_field(name="Modelo", value=modelo, inline=True)
+        embed.add_field(name="Año", value=str(anio), inline=True)
+        
+        embed.add_field(name="Color", value=color, inline=True)
+        embed.add_field(name="Gama", value=gama, inline=True)
+        embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
+        
+        embed.add_field(name="Revisión Técnica", value=revision_tecnica, inline=True)
+        embed.add_field(name="Permiso de Circulación", value=permiso_circulacion, inline=True)
+        embed.add_field(name="Registrado por", value=registrador_nombre, inline=True)
+        
+        # Establecer la imagen del vehículo
+        embed.set_image(url=imagen_url)
+        
+        # Establecer la imagen miniatura como el avatar_url de la cédula
+        embed.set_thumbnail(url=avatar_url)
+        
+        await interaction.response.send_message(embed=embed)
     
-    user_id = vehiculo['user_id']
-    modelo = vehiculo['modelo']
-    marca = vehiculo['marca']
-    gama = vehiculo['gama']
-    anio = vehiculo['anio']
-    color = vehiculo['color']
-    revision_tecnica = vehiculo['revision_tecnica']
-    permiso_circulacion = vehiculo['permiso_circulacion']
-    codigo_pago = vehiculo['codigo_pago']
-    imagen_url = vehiculo['imagen_url']
-    fecha_registro = vehiculo['fecha_registro']
-    registrado_por = vehiculo['registrado_por']
-    rut = vehiculo['rut']
-    avatar_url = vehiculo['avatar_url']
-    
-    # Obtener información del propietario y registrador
-    propietario = interaction.guild.get_member(user_id)
-    registrador = interaction.guild.get_member(registrado_por)
-    
-    propietario_nombre = propietario.mention if propietario else "Desconocido"
-    registrador_nombre = registrador.mention if registrador else "Desconocido"
-    
-    # Crear y enviar el mensaje embebido con el vehículo
-    embed = discord.Embed(
-        title=f"🇨🇱 SANTIAGO RP 🇨🇱",
-        description="REGISTRO CIVIL Y DE VEHÍCULOS",
-        color=discord.Color.blue()
-    )
-    
-    embed.add_field(name="CERTIFICADO DE REGISTRO VEHICULAR", value=f"Placa: {placa}", inline=False)
-    
-    # Información del vehículo
-    embed.add_field(name="Propietario", value=propietario_nombre, inline=True)
-    embed.add_field(name="RUT", value=rut, inline=True)
-    embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
-    
-    embed.add_field(name="Marca", value=marca, inline=True)
-    embed.add_field(name="Modelo", value=modelo, inline=True)
-    embed.add_field(name="Año", value=str(anio), inline=True)
-    
-    embed.add_field(name="Color", value=color, inline=True)
-    embed.add_field(name="Gama", value=gama, inline=True)
-    embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
-    
-    embed.add_field(name="Revisión Técnica", value=revision_tecnica, inline=True)
-    embed.add_field(name="Permiso de Circulación", value=permiso_circulacion, inline=True)
-    embed.add_field(name="Registrado por", value=registrador_nombre, inline=True)
-    
-    # Establecer la imagen del vehículo
-    embed.set_image(url=imagen_url)
-    
-    # Establecer la imagen miniatura como el avatar_url de la cédula
-    embed.set_thumbnail(url=avatar_url)
-    
-    await interaction.response.send_message(embed=embed)
+    finally:
+        cursor.close()
+        conn.close()
 
 # Comando de barra diagonal para eliminar vehículo
 @bot.tree.command(name="eliminar-vehiculo", description="Elimina el registro de un vehículo")
@@ -1712,7 +1792,7 @@ async def slash_eliminar_vehiculo(interaction: discord.Interaction, placa: str):
         return
     
     # Verificar si el vehículo existe y obtener información completa
-    cursor = execute_with_retry('''
+    cursor, conn = execute_with_retry('''
     SELECT v.user_id, v.marca, v.modelo, v.gama, v.anio, v.color, 
            v.revision_tecnica, v.permiso_circulacion, v.codigo_pago, 
            v.imagen_url, v.fecha_registro, c.rut, c.avatar_url
@@ -1721,128 +1801,137 @@ async def slash_eliminar_vehiculo(interaction: discord.Interaction, placa: str):
     WHERE v.placa = %s
     ''', (placa,))
     
-    vehiculo = cursor.fetchone()
+    try:
+        vehiculo = cursor.fetchone()
+        if not vehiculo:
+            embed = discord.Embed(
+                title="❌ Vehículo no encontrado",
+                description=f"No se encontró ningún vehículo con la placa {placa}.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        user_id = vehiculo['user_id']
+        marca = vehiculo['marca']
+        modelo = vehiculo['modelo']
+        gama = vehiculo['gama']
+        anio = vehiculo['anio']
+        color = vehiculo['color']
+        revision_tecnica = vehiculo['revision_tecnica']
+        permiso_circulacion = vehiculo['permiso_circulacion']
+        codigo_pago = vehiculo['codigo_pago']
+        imagen_url = vehiculo['imagen_url']
+        fecha_registro = vehiculo['fecha_registro']
+        rut = vehiculo['rut']
+        avatar_url = vehiculo['avatar_url']
+        
+        propietario = interaction.guild.get_member(int(user_id))
+        propietario_nombre = propietario.mention if propietario else "Desconocido"
     
-    if not vehiculo:
-        embed = discord.Embed(
-            title="❌ Vehículo no encontrado",
-            description=f"No se encontró ningún vehículo con la placa {placa}.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    user_id = vehiculo['user_id']
-    marca = vehiculo['marca']
-    modelo = vehiculo['modelo']
-    gama = vehiculo['gama']
-    anio = vehiculo['anio']
-    color = vehiculo['color']
-    revision_tecnica = vehiculo['revision_tecnica']
-    permiso_circulacion = vehiculo['permiso_circulacion']
-    codigo_pago = vehiculo['codigo_pago']
-    imagen_url = vehiculo['imagen_url']
-    fecha_registro = vehiculo['fecha_registro']
-    rut = vehiculo['rut']
-    avatar_url = vehiculo['avatar_url']
-    
-    propietario = interaction.guild.get_member(user_id)
-    propietario_nombre = propietario.mention if propietario else "Desconocido"
+    finally:
+        cursor.close()
+        conn.close()
     
     # Eliminar el vehículo
     try:
-        cursor = execute_with_retry('DELETE FROM vehiculos WHERE placa = %s', (placa,))
+        cursor, conn = execute_with_retry('DELETE FROM vehiculos WHERE placa = %s', (placa,))
         
-        # Mensaje de éxito para el usuario
-        embed = discord.Embed(
-            title="✅ Vehículo Eliminado",
-            description=f"El registro del vehículo con placa {placa} ha sido eliminado correctamente.",
-            color=discord.Color.green()
-        )
-        embed.add_field(
-            name="Información eliminada",
-            value=f"Propietario: {propietario_nombre}\nRUT: {rut}\nVehículo: {marca} {modelo}",
-            inline=False
-        )
-        embed.set_footer(text="Santiago RP - Registro de Vehículos")
-        
-        await interaction.response.send_message(embed=embed)
-        
-        # Enviar log al canal de logs
-        canal_logs = interaction.guild.get_channel(canal_logs_id)
-        if canal_logs:
-            log_embed = discord.Embed(
-                title="🗑️ Registro Vehicular Eliminado",
-                description=f"Se ha eliminado un registro vehicular del sistema.",
-                color=discord.Color.orange(),
-                timestamp=datetime.now()
+        try:
+            # Mensaje de éxito para el usuario
+            embed = discord.Embed(
+                title="✅ Vehículo Eliminado",
+                description=f"El registro del vehículo con placa {placa} ha sido eliminado correctamente.",
+                color=discord.Color.green()
             )
-            log_embed.add_field(
-                name="Administrador",
-                value=f"{interaction.user.mention} ({interaction.user.name})",
-                inline=True
+            embed.add_field(
+                name="Información eliminada",
+                value=f"Propietario: {propietario_nombre}\nRUT: {rut}\nVehículo: {marca} {modelo}",
+                inline=False
             )
-            log_embed.add_field(
-                name="Propietario",
-                value=f"{propietario_nombre} ({propietario.name if propietario else 'Desconocido'})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="RUT",
-                value=rut,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Placa",
-                value=placa,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Vehículo",
-                value=f"{marca} {modelo}",
-                inline=True
-            )
-            log_embed.add_field(
-                name="Año",
-                value=str(anio),
-                inline=True
-            )
-            log_embed.add_field(
-                name="Color",
-                value=color,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Gama",
-                value=gama,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Código de Pago",
-                value=codigo_pago,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Revisión Técnica",
-                value=revision_tecnica,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Permiso de Circulación",
-                value=permiso_circulacion,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Fecha de Registro",
-                value=fecha_registro,
-                inline=True
-            )
-            log_embed.set_thumbnail(url=avatar_url if avatar_url else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png")
-            log_embed.set_footer(text=f"ID del usuario: {user_id}")
+            embed.set_footer(text="Santiago RP - Registro de Vehículos")
             
-            await canal_logs.send(embed=log_embed)
-        else:
-            logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+            await interaction.response.send_message(embed=embed)
+            
+            # Enviar log al canal de logs
+            canal_logs = interaction.guild.get_channel(canal_logs_id)
+            if canal_logs:
+                log_embed = discord.Embed(
+                    title="🗑️ Registro Vehicular Eliminado",
+                    description=f"Se ha eliminado un registro vehicular del sistema.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                log_embed.add_field(
+                    name="Administrador",
+                    value=f"{interaction.user.mention} ({interaction.user.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Propietario",
+                    value=f"{propietario_nombre} ({propietario.name if propietario else 'Desconocido'})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="RUT",
+                    value=rut,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Placa",
+                    value=placa,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Vehículo",
+                    value=f"{marca} {modelo}",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Año",
+                    value=str(anio),
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Color",
+                    value=color,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Gama",
+                    value=gama,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Código de Pago",
+                    value=codigo_pago,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Revisión Técnica",
+                    value=revision_tecnica,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Permiso de Circulación",
+                    value=permiso_circulacion,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Fecha de Registro",
+                    value=fecha_registro,
+                    inline=True
+                )
+                log_embed.set_thumbnail(url=avatar_url if avatar_url else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png")
+                log_embed.set_footer(text=f"ID del usuario: {user_id}")
+                
+                await canal_logs.send(embed=log_embed)
+            else:
+                logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+        
+        finally:
+            cursor.close()
+            conn.close()
             
     except Exception as e:
         logger.error(f"Error al eliminar vehículo: {e}")
@@ -1867,6 +1956,8 @@ def generar_codigo_pago():
     descripcion="Descripción o motivo del código de pago"
 )
 async def slash_crear_codigo_pago(interaction: discord.Interaction, ciudadano: discord.Member, monto: int, descripcion: str):
+    """Crea un código de pago para un ciudadano (solo roles autorizados)"""
+    
     roles_autorizados = [
         1339386615235346439, 
         1347803116741066834, 
@@ -1896,57 +1987,66 @@ async def slash_crear_codigo_pago(interaction: discord.Interaction, ciudadano: d
         return
     
     # Obtener información de la cédula
-    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (ciudadano.id,))
+    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
     try:
         cedula = cursor.fetchone()
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Ciudadano sin cédula",
+                description=f"{ciudadano.mention} no tiene una cédula de identidad registrada.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        rut = cedula['rut']
+        avatar_url = cedula['avatar_url']
+    
     finally:
         cursor.close()
         conn.close()
     
-    if not cedula:
-        embed = discord.Embed(
-            title="❌ Ciudadano sin cédula",
-            description=f"{ciudadano.mention} no tiene una cédula de identidad registrada.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    rut = cedula['rut']
-    avatar_url = cedula['avatar_url']
-    
     # Generar código único
-    codigo = str(uuid.uuid4())
+    codigo = generar_codigo_pago()  # Use the generar_codigo_pago function for consistency
     fecha_creacion = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     
     # Guardar el código en la base de datos
-    cursor, conn = execute_with_retry('''
-    INSERT INTO payment_codes 
-    (code, amount, description, user_id, created_at, created_by) 
-    VALUES (%s, %s, %s, %s, %s, %s)
-    ''', (codigo, monto, descripcion, ciudadano.id, fecha_creacion, interaction.user.id))
     try:
-        pass  # No necesitamos resultados para INSERT, pero aseguramos que el commit se haya hecho
-    finally:
-        cursor.close()
-        conn.close()
-    
-        # Crear embed con la información del código de pago
-        embed = discord.Embed(
-            title="💸 CÓDIGO DE PAGO CREADO 💸",
-            description=f"Se ha creado un código de pago para {ciudadano.mention}",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Código", value=f"`{codigo}`", inline=True)
-        embed.add_field(name="Monto", value=f"${monto:,} CLP", inline=True)
-        embed.add_field(name="Descripción", value=descripcion, inline=False)
-        embed.add_field(name="RUT", value=rut, inline=True)
-        embed.add_field(name="Creado por", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Fecha de Creación", value=fecha_creacion, inline=True)
-        embed.set_thumbnail(url=avatar_url)
-    
-    await interaction.response.send_message(embed=embed)
+        cursor, conn = execute_with_retry('''
+        INSERT INTO payment_codes 
+        (code, amount, description, user_id, created_at, created_by) 
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (codigo, monto, descripcion, str(ciudadano.id), fecha_creacion, str(interaction.user.id)))
         
+        try:
+            # Crear embed con la información del código de pago
+            embed = discord.Embed(
+                title="💸 CÓDIGO DE PAGO CREADO 💸",
+                description=f"Se ha creado un código de pago para {ciudadano.mention}",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="Código", value=f"`{codigo}`", inline=True)
+            embed.add_field(name="Monto", value=f"${monto:,} CLP", inline=True)
+            embed.add_field(name="Descripción", value=descripcion, inline=False)
+            embed.add_field(name="RUT", value=rut, inline=True)
+            embed.add_field(name="Creado por", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Fecha de Creación", value=fecha_creacion, inline=True)
+            embed.set_thumbnail(url=avatar_url)
+            
+            await interaction.response.send_message(embed=embed)
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
+    except mysql.connector.Error as e:
+        logger.error(f"Error al crear código de pago: {e}")
+        embed = discord.Embed(
+            title="❌ Error al crear código de pago",
+            description="Ocurrió un error al crear el código de pago. Por favor, intenta de nuevo más tarde.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # Función para autocompletar zona
 async def autocompletar_zona(
@@ -2019,11 +2119,10 @@ async def slash_registrar_propiedad(
     # Diferir la respuesta
     await interaction.response.defer()
     
+    # Verificar si el ciudadano tiene cédula y obtener el avatar_url
+    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
     try:
-        # Verificar si el ciudadano tiene cédula y obtener el avatar_url
-        cursor = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
         cedula = cursor.fetchone()
-        
         if not cedula:
             embed = discord.Embed(
                 title="❌ Ciudadano sin cédula",
@@ -2035,21 +2134,25 @@ async def slash_registrar_propiedad(
         
         rut = cedula['rut']
         avatar_url = cedula['avatar_url']
-        
-        # Validar número de domicilio
-        if not numero_domicilio.strip():
-            embed = discord.Embed(
-                title="❌ Número de domicilio inválido",
-                description="El número de domicilio no puede estar vacío.",
-                color=discord.Color.red()
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-        
-        # Verificar si el número de domicilio ya está registrado
-        cursor = execute_with_retry('SELECT id FROM propiedades WHERE numero_domicilio = %s', (numero_domicilio,))
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    # Validar número de domicilio
+    if not numero_domicilio.strip():
+        embed = discord.Embed(
+            title="❌ Número de domicilio inválido",
+            description="El número de domicilio no puede estar vacío.",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Verificar si el número de domicilio ya está registrado
+    cursor, conn = execute_with_retry('SELECT id FROM propiedades WHERE numero_domicilio = %s', (numero_domicilio,))
+    try:
         domicilio_existente = cursor.fetchone()
-        
         if domicilio_existente:
             embed = discord.Embed(
                 title="❌ Domicilio ya registrado",
@@ -2058,56 +2161,60 @@ async def slash_registrar_propiedad(
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        
-        # Validar zona
-        if zona not in ZONAS_PROPIEDAD:
-            embed = discord.Embed(
-                title="❌ Zona inválida",
-                description=f"La zona debe ser una de las siguientes: {', '.join(ZONAS_PROPIEDAD)}.",
-                color=discord.Color.red()
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-        
-        # Validar color
-        if color not in COLORES_VEHICULO:
-            embed = discord.Embed(
-                title="❌ Color inválido",
-                description=f"El color debe ser uno de los siguientes: {', '.join(COLORES_VEHICULO)}.",
-                color=discord.Color.red()
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-        
-        # Validar número de pisos
-        pisos_validos, pisos_int = validar_numero_pisos(numero_pisos)
-        if not pisos_validos:
-            embed = discord.Embed(
-                title="❌ Número de pisos inválido",
-                description="El número de pisos debe ser un número entero positivo.",
-                color=discord.Color.red()
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-        
-        # Validar archivo de imagen
-        if not imagen.content_type.startswith('image/'):
-            embed = discord.Embed(
-                title="❌ Archivo inválido",
-                description="Debes subir una imagen válida (JPEG, PNG, etc.).",
-                color=discord.Color.red()
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-        
-        # Verificar si el código de pago existe y no está usado
-        cursor = execute_with_retry('''
-        SELECT code, used FROM payment_codes 
-        WHERE code = %s AND user_id = %s
-        ''', (codigo_pago, str(ciudadano.id)))
-        
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    # Validar zona
+    if zona not in ZONAS_PROPIEDAD:
+        embed = discord.Embed(
+            title="❌ Zona inválida",
+            description=f"La zona debe ser una de las siguientes: {', '.join(ZONAS_PROPIEDAD)}.",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Validar color
+    if color not in COLORES_VEHICULO:
+        embed = discord.Embed(
+            title="❌ Color inválido",
+            description=f"El color debe ser uno de los siguientes: {', '.join(COLORES_VEHICULO)}.",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Validar número de pisos
+    pisos_validos, pisos_int = validar_numero_pisos(numero_pisos)
+    if not pisos_validos:
+        embed = discord.Embed(
+            title="❌ Número de pisos inválido",
+            description="El número de pisos debe ser un número entero positivo.",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Validar archivo de imagen
+    if not imagen.content_type.startswith('image/'):
+        embed = discord.Embed(
+            title="❌ Archivo inválido",
+            description="Debes subir una imagen válida (JPEG, PNG, etc.).",
+            color=discord.Color.red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+    
+    # Verificar si el código de pago existe y no está usado
+    cursor, conn = execute_with_retry('''
+    SELECT code, used FROM payment_codes 
+    WHERE code = %s AND user_id = %s
+    ''', (codigo_pago, str(ciudadano.id)))
+    
+    try:
         codigo_pago_data = cursor.fetchone()
-        
         if not codigo_pago_data:
             embed = discord.Embed(
                 title="❌ Código de pago inválido",
@@ -2125,131 +2232,146 @@ async def slash_registrar_propiedad(
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        
-        # Fecha de registro
-        fecha_registro = datetime.now().strftime("%d/%m/%Y")
-        
-        # Obtener URL de la imagen
-        imagen_url = imagen.url
-        
-        # Registrar la propiedad y marcar el código como usado
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    # Fecha de registro
+    fecha_registro = datetime.now().strftime("%d/%m/%Y")
+    
+    # Obtener URL de la imagen
+    imagen_url = imagen.url
+    
+    # Registrar la propiedad y marcar el código como usado
+    try:
         # Registrar la propiedad
-        cursor = execute_with_retry('''
+        cursor, conn = execute_with_retry('''
         INSERT INTO propiedades 
         (user_id, numero_domicilio, zona, color, numero_pisos, codigo_pago, imagen_url, fecha_registro, registrado_por) 
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (str(ciudadano.id), numero_domicilio, zona, color, pisos_int, codigo_pago, imagen_url, 
               fecha_registro, str(interaction.user.id)))
         
-        # Marcar el código de pago como usado
-        cursor = execute_with_retry('''
-        UPDATE payment_codes 
-        SET used = %s, used_at = %s 
-        WHERE code = %s
-        ''', (True, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), codigo_pago))
-        
-        # Crear y enviar el mensaje embebido con la propiedad registrada
-        embed = discord.Embed(
-            title="🇨🇱 SANTIAGO RP 🇨🇱",
-            description="REGISTRO CIVIL Y DE PROPIEDADES",
-            color=discord.Color.blue()
-        )
-        
-        embed.add_field(name="CERTIFICADO DE REGISTRO DE PROPIEDAD", value=f"Domicilio: {numero_domicilio}", inline=False)
-        
-        embed.add_field(name="Propietario", value=ciudadano.mention, inline=True)
-        embed.add_field(name="RUT", value=rut, inline=True)
-        embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
-        
-        embed.add_field(name="Zona", value=zona, inline=True)
-        embed.add_field(name="Color", value=color, inline=True)
-        embed.add_field(name="Número de Pisos", value=str(pisos_int), inline=True)
-        
-        embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
-        embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
-        
-        embed.set_image(url=imagen_url)
-        embed.set_thumbnail(url=avatar_url)
-        
-        await interaction.followup.send(embed=embed)
-        
-        # Enviar mensaje efímero de confirmación al usuario
-        confirmacion_embed = discord.Embed(
-            title="✅ ¡Propiedad Registrada con Éxito!",
-            description=f"La propiedad con domicilio {numero_domicilio} ha sido registrada correctamente para {ciudadano.mention}",
-            color=discord.Color.green()
-        )
-        confirmacion_embed.add_field(
-            name="📋 Detalles",
-            value=f"Zona: {zona}\nColor: {color}\nNúmero de Pisos: {pisos_int}\nCódigo de Pago: {codigo_pago}",
-            inline=False
-        )
-        confirmacion_embed.set_footer(text="Santiago RP - Registro de Propiedades")
-        
-        await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
-        
-        # Enviar log al canal de logs
-        canal_logs = interaction.guild.get_channel(1363653392454520963)
-        if canal_logs:
-            log_embed = discord.Embed(
-                title="🏠 Propiedad Registrada",
-                description=f"Se ha registrado una nueva propiedad en el sistema.",
-                color=discord.Color.blue(),
-                timestamp=datetime.now()
-            )
-            log_embed.add_field(
-                name="Administrador",
-                value=f"{interaction.user.mention} ({interaction.user.name})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="Propietario",
-                value=f"{ciudadano.mention} ({ciudadano.name})",
-                inline=True
-            )
-            log_embed.add_field(
-                name="RUT",
-                value=rut,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Domicilio",
-                value=numero_domicilio,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Zona",
-                value=zona,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Color",
-                value=color,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Número de Pisos",
-                value=str(pisos_int),
-                inline=True
-            )
-            log_embed.add_field(
-                name="Código de Pago",
-                value=codigo_pago,
-                inline=True
-            )
-            log_embed.add_field(
-                name="Fecha de Registro",
-                value=fecha_registro,
-                inline=True
-            )
-            log_embed.set_image(url=imagen_url)
-            log_embed.set_thumbnail(url=avatar_url if avatar_url else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png")
-            log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
+        try:
+            # Marcar el código de pago como usado
+            cursor, conn = execute_with_retry('''
+            UPDATE payment_codes 
+            SET used = %s, used_at = %s 
+            WHERE code = %s
+            ''', (True, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), codigo_pago))
             
-            await canal_logs.send(embed=log_embed)
-        else:
-            logger.error(f"No se pudo encontrar el canal de logs con ID 1363653392454520963")
+            try:
+                # Crear y enviar el mensaje embebido con la propiedad registrada
+                embed = discord.Embed(
+                    title="🇨🇱 SANTIAGO RP 🇨🇱",
+                    description="REGISTRO CIVIL Y DE PROPIEDADES",
+                    color=discord.Color.blue()
+                )
+                
+                embed.add_field(name="CERTIFICADO DE REGISTRO DE PROPIEDAD", value=f"Domicilio: {numero_domicilio}", inline=False)
+                
+                embed.add_field(name="Propietario", value=ciudadano.mention, inline=True)
+                embed.add_field(name="RUT", value=rut, inline=True)
+                embed.add_field(name="Fecha Registro", value=fecha_registro, inline=True)
+                
+                embed.add_field(name="Zona", value=zona, inline=True)
+                embed.add_field(name="Color", value=color, inline=True)
+                embed.add_field(name="Número de Pisos", value=str(pisos_int), inline=True)
+                
+                embed.add_field(name="Código de Pago", value=codigo_pago, inline=True)
+                embed.add_field(name="Registrado por", value=interaction.user.mention, inline=True)
+                
+                embed.set_image(url=imagen_url)
+                embed.set_thumbnail(url=avatar_url)
+                
+                await interaction.followup.send(embed=embed)
+                
+                # Enviar mensaje efímero de confirmación al usuario
+                confirmacion_embed = discord.Embed(
+                    title="✅ ¡Propiedad Registrada con Éxito!",
+                    description=f"La propiedad con domicilio {numero_domicilio} ha sido registrada correctamente para {ciudadano.mention}",
+                    color=discord.Color.green()
+                )
+                confirmacion_embed.add_field(
+                    name="📋 Detalles",
+                    value=f"Zona: {zona}\nColor: {color}\nNúmero de Pisos: {pisos_int}\nCódigo de Pago: {codigo_pago}",
+                    inline=False
+                )
+                confirmacion_embed.set_footer(text="Santiago RP - Registro de Propiedades")
+                
+                await interaction.followup.send(embed=confirmacion_embed, ephemeral=True)
+                
+                # Enviar log al canal de logs
+                canal_logs = interaction.guild.get_channel(1363653392454520963)
+                if canal_logs:
+                    log_embed = discord.Embed(
+                        title="🏠 Propiedad Registrada",
+                        description=f"Se ha registrado una nueva propiedad en el sistema.",
+                        color=discord.Color.blue(),
+                        timestamp=datetime.now()
+                    )
+                    log_embed.add_field(
+                        name="Administrador",
+                        value=f"{interaction.user.mention} ({interaction.user.name})",
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Propietario",
+                        value=f"{ciudadano.mention} ({ciudadano.name})",
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="RUT",
+                        value=rut,
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Domicilio",
+                        value=numero_domicilio,
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Zona",
+                        value=zona,
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Color",
+                        value=color,
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Número de Pisos",
+                        value=str(pisos_int),
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Código de Pago",
+                        value=codigo_pago,
+                        inline=True
+                    )
+                    log_embed.add_field(
+                        name="Fecha de Registro",
+                        value=fecha_registro,
+                        inline=True
+                    )
+                    log_embed.set_image(url=imagen_url)
+                    log_embed.set_thumbnail(url=avatar_url if avatar_url else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png")
+                    log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
+                    
+                    await canal_logs.send(embed=log_embed)
+                else:
+                    logger.error(f"No se pudo encontrar el canal de logs con ID 1363653392454520963")
             
+            finally:
+                cursor.close()
+                conn.close()
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
     except mysql.connector.Error as e:
         logger.error(f"Error al registrar propiedad: {e}")
         embed = discord.Embed(
@@ -2266,6 +2388,8 @@ async def slash_registrar_propiedad(
     numero_domicilio="Número de domicilio de la propiedad a eliminar"
 )
 async def slash_eliminar_propiedad(interaction: discord.Interaction, ciudadano: discord.Member, numero_domicilio: str):
+    """Elimina el registro de una propiedad de un ciudadano (solo roles autorizados)"""
+    
     roles_autorizados = [
         1339386615235346439, 
         1347803116741066834, 
@@ -2289,98 +2413,138 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, ciudadano: 
     
     # Verificar si la propiedad existe
     cursor, conn = execute_with_retry('''
-    SELECT numero_domicilio, zona FROM propiedades WHERE user_id = %s AND numero_domicilio = %s
-    ''', (ciudadano.id, numero_domicilio))
+    SELECT numero_domicilio, zona, color, numero_pisos, codigo_pago, imagen_url, fecha_registro
+    FROM propiedades WHERE user_id = %s AND numero_domicilio = %s
+    ''', (str(ciudadano.id), numero_domicilio))
+    
     try:
         result = cursor.fetchone()
+        if not result:
+            embed = discord.Embed(
+                title="❌ Propiedad no encontrada",
+                description=f"No se encontró una propiedad con el número de domicilio {numero_domicilio} para {ciudadano.display_name}.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        numero_domicilio_prop = result['numero_domicilio']
+        zona = result['zona']
+        color = result['color']
+        numero_pisos = result['numero_pisos']
+        codigo_pago = result['codigo_pago']
+        imagen_url = result['imagen_url']
+        fecha_registro = result['fecha_registro']
+    
     finally:
         cursor.close()
         conn.close()
     
-    if not result:
+    # Obtener información de la cédula para el log
+    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
+    try:
+        cedula = cursor.fetchone()
+        rut = cedula['rut'] if cedula else "No disponible"
+        avatar_url = cedula['avatar_url'] if cedula else "https://tr.rbxcdn.com/e5b3371b4efc7642a22c1b36265a9ba9/420/420/AvatarHeadshot/Png"
+    
+    finally:
+        cursor.close()
+        conn.close()
+    
+    # Eliminar la propiedad
+    try:
+        cursor, conn = execute_with_retry('DELETE FROM propiedades WHERE user_id = %s AND numero_domicilio = %s', (str(ciudadano.id), numero_domicilio))
+        
+        try:
+            # Mensaje de éxito
+            embed = discord.Embed(
+                title="✅ Propiedad Eliminada",
+                description=f"La propiedad con número de domicilio {numero_domicilio} de {ciudadano.mention} ha sido eliminada correctamente.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Información eliminada",
+                value=f"Número de Domicilio: {numero_domicilio_prop}\nZona: {zona}",
+                inline=False
+            )
+            embed.set_footer(text="Santiago RP - Registro de Propiedades")
+            
+            await interaction.response.send_message(embed=embed)
+            
+            # Enviar log al canal de logs
+            canal_logs = interaction.guild.get_channel(canal_logs_id)
+            if canal_logs:
+                log_embed = discord.Embed(
+                    title="🗑️ Propiedad Eliminada",
+                    description=f"Se ha eliminado una propiedad del sistema.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                log_embed.add_field(
+                    name="Administrador",
+                    value=f"{interaction.user.mention} ({interaction.user.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Ciudadano",
+                    value=f"{ciudadano.mention} ({ciudadano.name})",
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="RUT",
+                    value=rut,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Número de Domicilio",
+                    value=numero_domicilio_prop,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Zona",
+                    value=zona,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Color",
+                    value=color,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Número de Pisos",
+                    value=str(numero_pisos),
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Código de Pago",
+                    value=codigo_pago,
+                    inline=True
+                )
+                log_embed.add_field(
+                    name="Fecha de Registro",
+                    value=fecha_registro,
+                    inline=True
+                )
+                log_embed.set_thumbnail(url=avatar_url)
+                log_embed.set_image(url=imagen_url if imagen_url else None)
+                log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
+                
+                await canal_logs.send(embed=log_embed)
+            else:
+                logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
+    except mysql.connector.Error as e:
+        logger.error(f"Error al eliminar propiedad: {e}")
         embed = discord.Embed(
-            title="❌ Propiedad no encontrada",
-            description=f"No se encontró una propiedad con el número de domicilio {numero_domicilio} para {ciudadano.display_name}.",
+            title="❌ Error al eliminar propiedad",
+            description="Ocurrió un error al eliminar la propiedad. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    numero_domicilio_prop = result['numero_domicilio']
-    zona = result['zona']
-    
-    # Obtener información de la cédula para el log
-    cursor, conn = execute_with_retry('SELECT rut FROM cedulas WHERE user_id = %s', (ciudadano.id,))
-    try:
-        cedula = cursor.fetchone()
-    finally:
-        cursor.close()
-        conn.close()
-    
-    rut = cedula['rut'] if cedula else "No disponible"
-    
-    # Eliminar la propiedad
-    cursor, conn = execute_with_retry('DELETE FROM propiedades WHERE user_id = %s AND numero_domicilio = %s', (ciudadano.id, numero_domicilio))
-    try:
-        pass  # DELETE no devuelve resultados, pero el commit ya se hizo en execute_with_retry
-    finally:
-        cursor.close()
-        conn.close()
-    
-    # Mensaje de éxito
-    embed = discord.Embed(
-        title="✅ Propiedad Eliminada",
-        description=f"La propiedad con número de domicilio {numero_domicilio} de {ciudadano.mention} ha sido eliminada correctamente.",
-        color=discord.Color.green()
-    )
-    embed.add_field(
-        name="Información eliminada",
-        value=f"Número de Domicilio: {numero_domicilio_prop}\nZona: {zona}",
-        inline=False
-    )
-    embed.set_footer(text="Santiago RP - Registro de Propiedades")
-    
-    await interaction.response.send_message(embed=embed)
-    
-    # Enviar log al canal de logs
-    canal_logs = interaction.guild.get_channel(canal_logs_id)
-    if canal_logs:
-        log_embed = discord.Embed(
-            title="🗑️ Propiedad Eliminada",
-            description=f"Se ha eliminado una propiedad del sistema.",
-            color=discord.Color.orange(),
-            timestamp=datetime.now()
-        )
-        log_embed.add_field(
-            name="Administrador",
-            value=f"{interaction.user.mention} ({interaction.user.name})",
-            inline=True
-        )
-        log_embed.add_field(
-            name="Ciudadano",
-            value=f"{ciudadano.mention} ({ciudadano.name})",
-            inline=True
-        )
-        log_embed.add_field(
-            name="RUT",
-            value=rut,
-            inline=True
-        )
-        log_embed.add_field(
-            name="Número de Domicilio",
-            value=numero_domicilio_prop,
-            inline=True
-        )
-        log_embed.add_field(
-            name="Zona",
-            value=zona,
-            inline=True
-        )
-        log_embed.set_footer(text=f"ID del usuario: {ciudadano.id}")
-        
-        await canal_logs.send(embed=log_embed)
-    else:
-        logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
 
 # Comando de barra diagonal para ver propiedad
 @bot.tree.command(name="ver-propiedad", description="Muestra la información de una propiedad registrada")
@@ -2389,6 +2553,8 @@ async def slash_eliminar_propiedad(interaction: discord.Interaction, ciudadano: 
     numero_domicilio="Número de domicilio de la propiedad a ver"
 )
 async def slash_ver_propiedad(interaction: discord.Interaction, ciudadano: discord.Member, numero_domicilio: str):
+    """Muestra la información de una propiedad registrada"""
+    
     if interaction.channel_id != 1363653559719170159: 
         embed = discord.Embed(
             title="❌ Canal incorrecto",
@@ -2399,67 +2565,69 @@ async def slash_ver_propiedad(interaction: discord.Interaction, ciudadano: disco
         return
     
     # Obtener información de la cédula
-    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (ciudadano.id,))
+    cursor, conn = execute_with_retry('SELECT rut, avatar_url FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
     try:
         cedula = cursor.fetchone()
+        if not cedula:
+            embed = discord.Embed(
+                title="❌ Ciudadano sin cédula",
+                description=f"{ciudadano.mention} no tiene una cédula de identidad registrada.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        rut = cedula['rut']
+        avatar_url = cedula['avatar_url']
+    
     finally:
         cursor.close()
         conn.close()
-    
-    if not cedula:
-        embed = discord.Embed(
-            title="❌ Ciudadano sin cédula",
-            description=f"{ciudadano.mention} no tiene una cédula de identidad registrada.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    rut = cedula['rut']
-    avatar_url = cedula['avatar_url']
     
     # Obtener la propiedad
     cursor, conn = execute_with_retry('''
-    SELECT * FROM propiedades WHERE user_id = %s AND numero_domicilio = %s
-    ''', (ciudadano.id, numero_domicilio))
+    SELECT numero_domicilio, zona, color, numero_pisos, codigo_pago, imagen_url, fecha_registro, registrado_por
+    FROM propiedades WHERE user_id = %s AND numero_domicilio = %s
+    ''', (str(ciudadano.id), numero_domicilio))
+    
     try:
         propiedad = cursor.fetchone()
+        if not propiedad:
+            embed = discord.Embed(
+                title="❌ Propiedad no encontrada",
+                description=f"No se encontró una propiedad con el número de domicilio {numero_domicilio} para {ciudadano.mention}.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        # Obtener el nombre del registrador si está disponible
+        registrado_por = interaction.guild.get_member(int(propiedad['registrado_por']))
+        registrado_por_nombre = registrado_por.mention if registrado_por else "Desconocido"
+        
+        # Crear embed con la información de la propiedad
+        embed = discord.Embed(
+            title=f"🏠 SANTIAGO RP 🏠",
+            description="REGISTRO DE PROPIEDADES",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Número de Domicilio", value=propiedad['numero_domicilio'], inline=True)
+        embed.add_field(name="Zona", value=propiedad['zona'], inline=True)
+        embed.add_field(name="Color", value=propiedad['color'], inline=True)
+        embed.add_field(name="Número de Pisos", value=propiedad['numero_pisos'], inline=True)
+        embed.add_field(name="Código de Pago", value=propiedad['codigo_pago'], inline=True)
+        embed.add_field(name="Fecha de Registro", value=propiedad['fecha_registro'], inline=True)
+        embed.add_field(name="Registrado por", value=registrado_por_nombre, inline=True)
+        embed.add_field(name="Titular", value=ciudadano.mention, inline=True)
+        embed.add_field(name="RUT", value=rut, inline=True)
+        embed.set_image(url=propiedad['imagen_url'])
+        embed.set_thumbnail(url=avatar_url)
+        
+        await interaction.response.send_message(embed=embed)
+    
     finally:
         cursor.close()
         conn.close()
-    
-    if not propiedad:
-        embed = discord.Embed(
-            title="❌ Propiedad no encontrada",
-            description=f"No se encontró una propiedad con el número de domicilio {numero_domicilio} para {ciudadano.mention}.",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    # Obtener el nombre del registrador si está disponible
-    registrado_por = interaction.guild.get_member(propiedad['registrado_por'])
-    registrado_por_nombre = registrado_por.mention if registrado_por else "Desconocido"
-    
-    # Crear embed con la información de la propiedad
-    embed = discord.Embed(
-        title=f"🏠 SANTIAGO RP 🏠",
-        description="REGISTRO DE PROPIEDADES",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="Número de Domicilio", value=propiedad['numero_domicilio'], inline=True)
-    embed.add_field(name="Zona", value=propiedad['zona'], inline=True)
-    embed.add_field(name="Color", value=propiedad['color'], inline=True)
-    embed.add_field(name="Número de Pisos", value=propiedad['numero_pisos'], inline=True)
-    embed.add_field(name="Código de Pago", value=propiedad['codigo_pago'], inline=True)
-    embed.add_field(name="Fecha de Registro", value=propiedad['fecha_registro'], inline=True)
-    embed.add_field(name="Registrado por", value=registrado_por_nombre, inline=True)
-    embed.add_field(name="Titular", value=ciudadano.mention, inline=True)
-    embed.add_field(name="RUT", value=rut, inline=True)
-    embed.set_image(url=propiedad['imagen_url'])
-    embed.set_thumbnail(url=avatar_url)
-    
-    await interaction.response.send_message(embed=embed)
 
 # Function for autocompleting emergency services
 async def autocompletar_servicio(
@@ -2661,40 +2829,36 @@ async def slash_entorno(
 
     # Registrar la alerta en la base de datos (para auditoría)
     try:
-        with db_lock:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS emergencias (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id BIGINT,
-                razon TEXT,
-                servicio VARCHAR(255),
-                ubicacion TEXT,
-                fecha VARCHAR(50),
-                servicios_notificados TEXT
-            )
-            ''')
-            cursor.execute('''
+        cursor, conn = execute_with_retry('''
+        CREATE TABLE IF NOT EXISTS emergencias (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT,
+            razon TEXT,
+            servicio VARCHAR(255),
+            ubicacion TEXT,
+            fecha VARCHAR(50),
+            servicios_notificados TEXT
+        )
+        ''')
+        try:
+            cursor, conn = execute_with_retry('''
             INSERT INTO emergencias 
             (user_id, razon, servicio, ubicacion, fecha, servicios_notificados) 
             VALUES (%s, %s, %s, %s, %s, %s)
             ''', (
-                interaction.user.id,
+                str(interaction.user.id),
                 razon,
                 servicio,
                 ubicacion,
                 datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 ", ".join(servicios_notificados)
             ))
-            conn.commit()
-        logger.info(f"Emergencia registrada para el usuario {interaction.user.id}")
-    except mysql.connector.Error as e:
-        logger.error(f"Error al registrar emergencia en la base de datos: {e}")
-    finally:
-        if 'conn' in locals() and conn.is_connected():
+            logger.info(f"Emergencia registrada para el usuario {interaction.user.id}")
+        finally:
             cursor.close()
             conn.close()
+    except mysql.connector.Error as e:
+        logger.error(f"Error al registrar emergencia en la base de datos: {e}")
 
     # Enviar log al canal de logs
     canal_logs_id = 1363652764613480560
@@ -2814,18 +2978,14 @@ async def slash_arrestar_ciudadano(
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
-        with db_lock:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            
-            # Verificar cédula del ciudadano
-            cursor.execute('''
-            SELECT primer_nombre, apellido_paterno, rut, avatar_url
-            FROM cedulas WHERE user_id = %s
-            ''', (str(detenido.id),))
-            
+        # Verificar cédula del ciudadano
+        cursor, conn = execute_with_retry('''
+        SELECT primer_nombre, apellido_paterno, rut, avatar_url
+        FROM cedulas WHERE user_id = %s
+        ''', (str(detenido.id),))
+        
+        try:
             cedula = cursor.fetchone()
-            
             if not cedula:
                 embed = discord.Embed(
                     title="📄 CÉDULA NO ENCONTRADA 📄",
@@ -2837,28 +2997,33 @@ async def slash_arrestar_ciudadano(
                 return
             
             nombre, apellido, rut, roblox_avatar = cedula
-            
-            # Crear tabla de arrestos si no existe
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS arrestos (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL,
-                rut VARCHAR(255) NOT NULL,
-                razon TEXT NOT NULL,
-                tiempo_prision VARCHAR(255) NOT NULL,
-                monto_multa INT NOT NULL,
-                foto_url TEXT NOT NULL,
-                fecha_arresto VARCHAR(50) NOT NULL,
-                oficial_id VARCHAR(255) NOT NULL,
-                estado VARCHAR(50) DEFAULT 'Activo'
-            )
-            ''')
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Crear tabla de arrestos si no existe
+        cursor, conn = execute_with_retry('''
+        CREATE TABLE IF NOT EXISTS arrestos (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            rut VARCHAR(255) NOT NULL,
+            razon TEXT NOT NULL,
+            tiempo_prision VARCHAR(255) NOT NULL,
+            monto_multa INT NOT NULL,
+            foto_url TEXT NOT NULL,
+            fecha_arresto VARCHAR(50) NOT NULL,
+            oficial_id VARCHAR(255) NOT NULL,
+            estado VARCHAR(50) DEFAULT 'Activo'
+        )
+        ''')
+        
+        try:
             # Registrar el arresto
             fecha_arresto = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             foto_url = foto.url
             
-            cursor.execute('''
+            cursor, conn = execute_with_retry('''
             INSERT INTO arrestos (
                 user_id, rut, razon, tiempo_prision, monto_multa, 
                 foto_url, fecha_arresto, oficial_id, estado
@@ -2869,18 +3034,22 @@ async def slash_arrestar_ciudadano(
             ))
             
             arresto_id = cursor.lastrowid
-            conn.commit()
             
             # Obtener información del oficial
-            cursor.execute('''
+            cursor, conn = execute_with_retry('''
             SELECT primer_nombre, apellido_paterno
             FROM cedulas WHERE user_id = %s
             ''', (str(interaction.user.id),))
             
-            oficial_info = cursor.fetchone()
-            nombre_oficial = "Oficial Desconocido"
-            if oficial_info:
-                nombre_oficial = f"{oficial_info[0]} {oficial_info[1]}"
+            try:
+                oficial_info = cursor.fetchone()
+                nombre_oficial = "Oficial Desconocido"
+                if oficial_info:
+                    nombre_oficial = f"{oficial_info[0]} {oficial_info[1]}"
+            
+            finally:
+                cursor.close()
+                conn.close()
             
             # Determinar la institución del oficial
             institucion = "Funcionario Público"
@@ -3060,9 +3229,13 @@ async def slash_arrestar_ciudadano(
                 await canal_logs.send(embed=log_embed)
             else:
                 logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
     except mysql.connector.Error as e:
-        logger.error(f"Error al registrar arresto en la base de datos: {str(e)}")
+        logger.error(f"Error al registrar arresto en la base de datos: {e}")
         embed = discord.Embed(
             title="⚠️ ERROR EN EL REGISTRO ⚠️",
             description=f"Ocurrió un error durante el registro del arresto: {str(e)}",
@@ -3070,10 +3243,6 @@ async def slash_arrestar_ciudadano(
         )
         embed.set_footer(text="Sistema Judicial - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
 
 @bot.tree.command(
     name="multar",
@@ -3145,18 +3314,14 @@ async def slash_multar_ciudadano(
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
-        with db_lock:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            
-            # Verificar cédula del ciudadano
-            cursor.execute('''
-            SELECT primer_nombre, apellido_paterno, rut, avatar_url
-            FROM cedulas WHERE user_id = %s
-            ''', (str(multado.id),))
-            
+        # Verificar cédula del ciudadano
+        cursor, conn = execute_with_retry('''
+        SELECT primer_nombre, apellido_paterno, rut, avatar_url
+        FROM cedulas WHERE user_id = %s
+        ''', (str(multado.id),))
+        
+        try:
             cedula = cursor.fetchone()
-            
             if not cedula:
                 embed = discord.Embed(
                     title="📄 CÉDULA NO ENCONTRADA 📄",
@@ -3168,27 +3333,32 @@ async def slash_multar_ciudadano(
                 return
             
             nombre, apellido, rut, roblox_avatar = cedula
-            
-            # Crear tabla de multas si no existe
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS multas (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id VARCHAR(255) NOT NULL,
-                rut VARCHAR(255) NOT NULL,
-                razon TEXT NOT NULL,
-                monto_multa INT NOT NULL,
-                foto_url TEXT NOT NULL,
-                fecha_multa VARCHAR(50) NOT NULL,
-                oficial_id VARCHAR(255) NOT NULL,
-                estado VARCHAR(50) DEFAULT 'Pendiente'
-            )
-            ''')
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Crear tabla de multas si no existe
+        cursor, conn = execute_with_retry('''
+        CREATE TABLE IF NOT EXISTS multas (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            rut VARCHAR(255) NOT NULL,
+            razon TEXT NOT NULL,
+            monto_multa INT NOT NULL,
+            foto_url TEXT NOT NULL,
+            fecha_multa VARCHAR(50) NOT NULL,
+            oficial_id VARCHAR(255) NOT NULL,
+            estado VARCHAR(50) DEFAULT 'Pendiente'
+        )
+        ''')
+        
+        try:
             # Registrar la multa
             fecha_multa = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             foto_url = foto.url
             
-            cursor.execute('''
+            cursor, conn = execute_with_retry('''
             INSERT INTO multas (
                 user_id, rut, razon, monto_multa, foto_url, 
                 fecha_multa, oficial_id, estado
@@ -3199,18 +3369,22 @@ async def slash_multar_ciudadano(
             ))
             
             multa_id = cursor.lastrowid
-            conn.commit()
             
             # Obtener información del oficial
-            cursor.execute('''
+            cursor, conn = execute_with_retry('''
             SELECT primer_nombre, apellido_paterno
             FROM cedulas WHERE user_id = %s
             ''', (str(interaction.user.id),))
             
-            oficial_info = cursor.fetchone()
-            nombre_oficial = "Oficial Desconocido"
-            if oficial_info:
-                nombre_oficial = f"{oficial_info[0]} {oficial_info[1]}"
+            try:
+                oficial_info = cursor.fetchone()
+                nombre_oficial = "Oficial Desconocido"
+                if oficial_info:
+                    nombre_oficial = f"{oficial_info[0]} {oficial_info[1]}"
+            
+            finally:
+                cursor.close()
+                conn.close()
             
             # Determinar la institución del oficial
             institucion = "Funcionario Público"
@@ -3390,9 +3564,13 @@ async def slash_multar_ciudadano(
                 await canal_logs.send(embed=log_embed)
             else:
                 logger.error(f"No se pudo encontrar el canal de logs con ID {canal_logs_id}")
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
     except mysql.connector.Error as e:
-        logger.error(f"Error al registrar multa en la base de datos: {str(e)}")
+        logger.error(f"Error al registrar multa en la base de datos: {e}")
         embed = discord.Embed(
             title="⚠️ ERROR EN EL REGISTRO ⚠️",
             description=f"Ocurrió un error durante el registro de la multa: {str(e)}",
@@ -3400,10 +3578,6 @@ async def slash_multar_ciudadano(
         )
         embed.set_footer(text="Sistema Judicial - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
 
 @bot.tree.command(
     name="borrar-antecedentes",
@@ -3441,18 +3615,14 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
     await interaction.response.defer(thinking=True)
     
     try:
-        with db_lock:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            
-            # Verificar cédula del ciudadano
-            cursor.execute('''
-            SELECT primer_nombre, apellido_paterno, rut, avatar_url
-            FROM cedulas WHERE user_id = %s
-            ''', (str(ciudadano.id),))
-            
+        # Verificar cédula del ciudadano
+        cursor, conn = execute_with_retry('''
+        SELECT primer_nombre, apellido_paterno, rut, avatar_url
+        FROM cedulas WHERE user_id = %s
+        ''', (str(ciudadano.id),))
+        
+        try:
             cedula = cursor.fetchone()
-            
             if not cedula:
                 embed = discord.Embed(
                     title="📄 CÉDULA NO ENCONTRADA 📄",
@@ -3464,53 +3634,66 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                 return
             
             nombre, apellido, rut, roblox_avatar = cedula
-            
-            # Obtener arrestos y multas antes de borrar (para el log)
-            cursor.execute('''
-            SELECT id, razon, tiempo_prision, monto_multa, fecha_arresto
-            FROM arrestos WHERE user_id = %s AND estado = 'Activo'
-            ''', (str(ciudadano.id),))
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Obtener arrestos y multas antes de borrar (para el log)
+        cursor, conn = execute_with_retry('''
+        SELECT id, razon, tiempo_prision, monto_multa, fecha_arresto
+        FROM arrestos WHERE user_id = %s AND estado = 'Activo'
+        ''', (str(ciudadano.id),))
+        
+        try:
             arrestos = cursor.fetchall()
-            
-            cursor.execute('''
-            SELECT id, razon, monto_multa, fecha_multa
-            FROM multas WHERE user_id = %s AND estado = 'Pendiente'
-            ''', (str(ciudadano.id),))
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        cursor, conn = execute_with_retry('''
+        SELECT id, razon, monto_multa, fecha_multa
+        FROM multas WHERE user_id = %s AND estado = 'Pendiente'
+        ''', (str(ciudadano.id),))
+        
+        try:
             multas = cursor.fetchall()
-            
-            # Si no hay antecedentes, mostrar mensaje
-            if not arrestos and not multas:
-                embed = discord.Embed(
-                    title="🟢 SIN ANTECEDENTES 🟢",
-                    description=f"{ciudadano.mention} no tiene antecedentes penales para borrar.",
-                    color=discord.Color.green()
-                )
-                embed.add_field(
-                    name="👤 Ciudadano",
-                    value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
-                    inline=False
-                )
-                embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
-                embed.set_footer(
-                    text="Sistema de Justicia - SantiagoRP",
-                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-                )
-                await interaction.followup.send(embed=embed)
-                return
-            
-            # Borrar arrestos
-            cursor.execute('''
-            DELETE FROM arrestos WHERE user_id = %s
-            ''', (str(ciudadano.id),))
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Si no hay antecedentes, mostrar mensaje
+        if not arrestos and not multas:
+            embed = discord.Embed(
+                title="🟢 SIN ANTECEDENTES 🟢",
+                description=f"{ciudadano.mention} no tiene antecedentes penales para borrar.",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="👤 Ciudadano",
+                value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
+                inline=False
+            )
+            embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
+            embed.set_footer(
+                text="Sistema de Justicia - SantiagoRP",
+                icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+            )
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Borrar arrestos
+        cursor, conn = execute_with_retry('''
+        DELETE FROM arrestos WHERE user_id = %s
+        ''', (str(ciudadano.id),))
+        
+        try:
             # Borrar multas
-            cursor.execute('''
+            cursor, conn = execute_with_retry('''
             DELETE FROM multas WHERE user_id = %s
             ''', (str(ciudadano.id),))
-            
-            conn.commit()
             
             # Crear mensaje de confirmación
             embed = discord.Embed(
@@ -3611,9 +3794,13 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
                 await canal_logs.send(embed=log_embed)
             else:
                 logger.error(f"No se pudo encontrar el canal de logs con ID {CANAL_LOGS_ID}")
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
     except mysql.connector.Error as e:
-        logger.error(f"Error al borrar antecedentes en la base de datos: {str(e)}")
+        logger.error(f"Error al borrar antecedentes en la base de datos: {e}")
         embed = discord.Embed(
             title="⚠️ ERROR AL BORRAR ANTECEDENTES ⚠️",
             description=f"Ocurrió un error al borrar los antecedentes: {str(e)}",
@@ -3621,10 +3808,6 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
         )
         embed.set_footer(text="Sistema de Justicia - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
 
 @bot.tree.command(
     name="ver-antecedentes",
@@ -3652,18 +3835,14 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
     await interaction.response.defer(thinking=True)
     
     try:
-        with db_lock:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            
-            # Verificar cédula del ciudadano
-            cursor.execute('''
-            SELECT primer_nombre, apellido_paterno, rut, avatar_url
-            FROM cedulas WHERE user_id = %s
-            ''', (str(ciudadano.id),))
-            
+        # Verificar cédula del ciudadano
+        cursor, conn = execute_with_retry('''
+        SELECT primer_nombre, apellido_paterno, rut, avatar_url
+        FROM cedulas WHERE user_id = %s
+        ''', (str(ciudadano.id),))
+        
+        try:
             cedula = cursor.fetchone()
-            
             if not cedula:
                 embed = discord.Embed(
                     title="📄 CÉDULA NO ENCONTRADA 📄",
@@ -3675,120 +3854,134 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
                 return
             
             nombre, apellido, rut, roblox_avatar = cedula
-            
-            # Obtener arrestos del ciudadano
-            cursor.execute('''
-            SELECT id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id
-            FROM arrestos WHERE user_id = %s AND estado = 'Activo'
-            ''', (str(ciudadano.id),))
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Obtener arrestos del ciudadano
+        cursor, conn = execute_with_retry('''
+        SELECT id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id
+        FROM arrestos WHERE user_id = %s AND estado = 'Activo'
+        ''', (str(ciudadano.id),))
+        
+        try:
             arrestos = cursor.fetchall()
-            
-            # Obtener multas del ciudadano
-            cursor.execute('''
-            SELECT id, razon, monto_multa, foto_url, fecha_multa, oficial_id
-            FROM multas WHERE user_id = %s AND estado = 'Pendiente'
-            ''', (str(ciudadano.id),))
-            
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Obtener multas del ciudadano
+        cursor, conn = execute_with_retry('''
+        SELECT id, razon, monto_multa, foto_url, fecha_multa, oficial_id
+        FROM multas WHERE user_id = %s AND estado = 'Pendiente'
+        ''', (str(ciudadano.id),))
+        
+        try:
             multas = cursor.fetchall()
-            
-            # Si no hay antecedentes, mostrar mensaje
-            if not arrestos and not multas:
-                embed = discord.Embed(
-                    title="🟢 SIN ANTECEDENTES 🟢",
-                    description=f"{ciudadano.mention} no tiene antecedentes penales registrados.",
-                    color=discord.Color.green()
-                )
-                embed.add_field(
-                    name="👤 Ciudadano",
-                    value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
-                    inline=False
-                )
-                embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
-                embed.set_footer(
-                    text="Sistema de Justicia - SantiagoRP",
-                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-                )
-                await interaction.followup.send(embed=embed)
-                return
-            
-            # Crear embed principal
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Si no hay antecedentes, mostrar mensaje
+        if not arrestos and not multas:
             embed = discord.Embed(
-                title="📜 ANTECEDENTES PENALES 📜",
-                description=f"**Reporte completo de antecedentes para {ciudadano.mention}**",
-                color=discord.Color.purple(),
-                timestamp=datetime.now()
+                title="🟢 SIN ANTECEDENTES 🟢",
+                description=f"{ciudadano.mention} no tiene antecedentes penales registrados.",
+                color=discord.Color.green()
             )
-            
             embed.add_field(
-                name="👤 DATOS DEL CIUDADANO",
-                value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}\n**ID:** {ciudadano.id}",
+                name="👤 Ciudadano",
+                value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
                 inline=False
             )
-            
-            # Mostrar arrestos
-            if arrestos:
-                arrestos_texto = ""
-                for arresto in arrestos:
-                    arresto_id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id = arresto
-                    oficial = interaction.guild.get_member(int(oficial_id))
-                    oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
-                    arrestos_texto += (
-                        f"**Expediente N° {arresto_id:06d}**\n"
-                        f"📜 **Delito:** {razon}\n"
-                        f"⛓️ **Sentencia:** {tiempo_prision}\n"
-                        f"💸 **Multa:** ${monto_multa:,} CLP\n"
-                        f"📅 **Fecha:** {fecha_arresto}\n"
-                        f"👮 **Oficial:** {oficial_nombre}\n\n"
-                    )
-                embed.add_field(
-                    name="🚨 ARRESTOS",
-                    value=arrestos_texto or "No hay arrestos registrados.",
-                    inline=False
-                )
-            else:
-                embed.add_field(
-                    name="🚨 ARRESTOS",
-                    value="No hay arrestos registrados.",
-                    inline=False
-                )
-            
-            # Mostrar multas
-            if multas:
-                multas_texto = ""
-                for multa in multas:
-                    multa_id, razon, monto_multa, foto_url, fecha_multa, oficial_id = multa
-                    oficial = interaction.guild.get_member(int(oficial_id))
-                    oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
-                    multas_texto += (
-                        f"**Multa N° {multa_id:06d}**\n"
-                        f"📜 **Motivo:** {razon}\n"
-                        f"💸 **Monto:** ${monto_multa:,} CLP\n"
-                        f"📅 **Fecha:** {fecha_multa}\n"
-                        f"👮 **Oficial:** {oficial_nombre}\n\n"
-                    )
-                embed.add_field(
-                    name="📝 MULTAS",
-                    value=multas_texto or "No hay multas registradas.",
-                    inline=False
-                )
-            else:
-                embed.add_field(
-                    name="📝 MULTAS",
-                    value="No hay multas registradas.",
-                    inline=False
-                )
-            
             embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
             embed.set_footer(
                 text="Sistema de Justicia - SantiagoRP",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
             )
-            
             await interaction.followup.send(embed=embed)
-            
+            return
+        
+        # Crear embed principal
+        embed = discord.Embed(
+            title="📜 ANTECEDENTES PENALES 📜",
+            description=f"**Reporte completo de antecedentes para {ciudadano.mention}**",
+            color=discord.Color.purple(),
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(
+            name="👤 DATOS DEL CIUDADANO",
+            value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}\n**ID:** {ciudadano.id}",
+            inline=False
+        )
+        
+        # Mostrar arrestos
+        if arrestos:
+            arrestos_texto = ""
+            for arresto in arrestos:
+                arresto_id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id = arresto
+                oficial = interaction.guild.get_member(int(oficial_id))
+                oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
+                arrestos_texto += (
+                    f"**Expediente N° {arresto_id:06d}**\n"
+                    f"📜 **Delito:** {razon}\n"
+                    f"⛓️ **Sentencia:** {tiempo_prision}\n"
+                    f"💸 **Multa:** ${monto_multa:,} CLP\n"
+                    f"📅 **Fecha:** {fecha_arresto}\n"
+                    f"👮 **Oficial:** {oficial_nombre}\n\n"
+                )
+            embed.add_field(
+                name="🚨 ARRESTOS",
+                value=arrestos_texto or "No hay arrestos registrados.",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="🚨 ARRESTOS",
+                value="No hay arrestos registrados.",
+                inline=False
+            )
+        
+        # Mostrar multas
+        if multas:
+            multas_texto = ""
+            for multa in multas:
+                multa_id, razon, monto_multa, foto_url, fecha_multa, oficial_id = multa
+                oficial = interaction.guild.get_member(int(oficial_id))
+                oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
+                multas_texto += (
+                    f"**Multa N° {multa_id:06d}**\n"
+                    f"📜 **Motivo:** {razon}\n"
+                    f"💸 **Monto:** ${monto_multa:,} CLP\n"
+                    f"📅 **Fecha:** {fecha_multa}\n"
+                    f"👮 **Oficial:** {oficial_nombre}\n\n"
+                )
+            embed.add_field(
+                name="📝 MULTAS",
+                value=multas_texto or "No hay multas registradas.",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📝 MULTAS",
+                value="No hay multas registradas.",
+                inline=False
+            )
+        
+        embed.set_thumbnail(url=roblox_avatar if roblox_avatar else ciudadano.display_avatar.url)
+        embed.set_footer(
+            text="Sistema de Justicia - SantiagoRP",
+            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
     except mysql.connector.Error as e:
-        logger.error(f"Error al consultar antecedentes en la base de datos: {str(e)}")
+        logger.error(f"Error al consultar antecedentes en la base de datos: {e}")
         embed = discord.Embed(
             title="⚠️ ERROR AL CONSULTAR ANTECEDENTES ⚠️",
             description=f"Ocurrió un error al consultar los antecedentes: {str(e)}",
@@ -3796,10 +3989,6 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
         )
         embed.set_footer(text="Sistema de Justicia - SantiagoRP")
         await interaction.followup.send(embed=embed, ephemeral=True)
-    finally:
-        if 'conn' in locals() and conn.is_connected():
-            cursor.close()
-            conn.close()
         
 @bot.tree.command(name="ayuda", description="Muestra una lista de todos los comandos disponibles y sus detalles")
 async def slash_ayuda(interaction: discord.Interaction):
