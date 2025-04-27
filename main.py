@@ -765,6 +765,12 @@ async def slash_eliminar_cedula(interaction: discord.Interaction, ciudadano: dis
             cursor.close()
             conn.close()
 
+        # Eliminar licencias relacionadas antes de eliminar la cédula
+        cursor, conn = execute_with_retry('DELETE FROM licencias WHERE user_id = %s', (str(ciudadano.id),))
+        cursor.close()
+        conn.close()
+
+        # Ahora sí elimina la cédula
         cursor, conn = execute_with_retry('DELETE FROM cedulas WHERE user_id = %s', (str(ciudadano.id),))
         try:
             embed = discord.Embed(
