@@ -3842,13 +3842,16 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
     await interaction.response.defer(thinking=True)
     
     try:
-        # Verificar cédula del ciudadano
-        cursor, conn = execute_with_retry('''
-        SELECT primer_nombre, apellido_paterno, rut, avatar_url
-        FROM cedulas WHERE user_id = %s
-        ''', (str(ciudadano.id),))
+        # Iniciar conexión a la base de datos
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
         
         try:
+            # Verificar cédula del ciudadano
+            cursor.execute('''
+            SELECT primer_nombre, apellido_paterno, rut, avatar_url
+            FROM cedulas WHERE user_id = %s
+            ''', (str(ciudadano.id),))
             cedula = cursor.fetchone()
             if not cedula:
                 embed = discord.Embed(
@@ -3860,148 +3863,168 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
             
-            nombre, apellido, rut, roblox_avatar = cedula
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Obtener arrestos del ciudadano
-        cursor, conn = execute_with_retry('''
-        SELECT id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id
-        FROM arrestos WHERE user_id = %s AND estado = 'Activo'
-        ''', (str(ciudadano.id),))
-        
-        try:
+            nombre = cedula['primer_nombre']
+            apellido = cedula['apellido_paterno']
+            rut = cedula['rut']
+            roblox_avatar = cedula['avatar_url']
+            
+            # Obtener arrestos del ciudadano
+            cursor.execute('''
+            SELECT id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id
+            FROM arrestos WHERE user_id = %s AND estado = 'Activo'
+            ''', (str(ciudadano.id),))
             arrestos = cursor.fetchall()
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Obtener multas del ciudadano
-        cursor, conn = execute_with_retry('''
-        SELECT id, razon, monto_multa, foto_url, fecha_multa, oficial_id
-        FROM multas WHERE user_id = %s AND estado = 'Pendiente'
-        ''', (str(ciudadano.id),))
-        
-        try:
+            
+            # Obtener multas del ciudadano
+            cursor.execute('''
+            SELECT id, razon, monto_multa, foto_url, fecha_multa, oficial_id
+            FROM multas WHERE user_id = %s AND estado = 'Pendiente'
+            ''', (str(ciudadano.id),))
             multas = cursor.fetchall()
-        
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Validar URL del avatar
-        default_avatar_url = "https://discord.com/assets/1f0bfc0865d324c2587920a7d80c609b.png"  # URL predeterminada de Discord
-        avatar_url = None
-        if roblox_avatar and isinstance(roblox_avatar, str) and roblox_avatar.startswith(('http://', 'https://')):
-            avatar_url = roblox_avatar
-        else:
-            try:
-                avatar_url = ciudadano.display_avatar.url if ciudadano.display_avatar else default_avatar_url
-            except Exception as e:
-                logger.warning(f"Error al obtener display_avatar.url para el usuario {ciudadano.id}: {str(e)}")
+            
+            # Validar URL del avatar
+            default_avatar_url = "https://discord.com/assets/1f0bfc0865d324c2587920a7d80c609b.png"
+            avatar_url = None
+            if roblox_avatar and isinstance(roblox_avatar, str) and roblox_avatar.startswith(('http://', 'https://')):
+                avatar_url = roblox_avatar
+            else:
+                try:
+                    avatar_url = ciudadano.display_avatar.url if ciudadano.display_avatar else default_avatar_url
+                except Exception as e:
+                    logger.warning(f"Error al obtener display_avatar.url para el usuario {ciudadano.id}: {str(e)}")
+                    avatar_url = default_avatar_url
+            
+            if not avatar_url:
+                logger.warning(f"No se pudo determinar una URL válida para el thumbnail del usuario {ciudadano.id}")
                 avatar_url = default_avatar_url
-        
-        if not avatar_url:
-            logger.warning(f"No se pudo determinar una URL válida para el thumbnail del usuario {ciudadano.id}")
-            avatar_url = default_avatar_url
-        
-        # Si no hay antecedentes, mostrar mensaje
-        if not arrestos and not multas:
+            
+            # Si no hay antecedentes, mostrar mensaje
+            if not arrestos and not multas:
+                embed = discord.Embed(
+                    title="🟢 SIN ANTECEDENTES 🟢",
+                    description=f"{ciudadano.mention} no tiene antecedentes penales registrados.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(
+                    name="👤 Ciudadano",
+                    value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
+                    inline=False
+                )
+                embed.set_thumbnail(url=avatar_url)
+                embed.set_footer(
+                    text="Sistema de Justicia - SantiagoRP",
+                    icon_url=interaction.guild.icon.url if interaction.guild.icon else None
+                )
+                await interaction.followup.send(embed=embed)
+                return
+            
+            # Crear embed principal
             embed = discord.Embed(
-                title="🟢 SIN ANTECEDENTES 🟢",
-                description=f"{ciudadano.mention} no tiene antecedentes penales registrados.",
-                color=discord.Color.green()
+                title="📜 ANTECEDENTES PENALES 📜",
+                description=f"**Reporte completo de antecedentes para {ciudadano.mention}**",
+                color=discord.Color.purple(),
+                timestamp=datetime.now()
             )
+            
             embed.add_field(
-                name="👤 Ciudadano",
-                value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}",
+                name="👤 DATOS DEL CIUDADANO",
+                value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}\n**ID:** {ciudadano.id}",
                 inline=False
             )
+            
+            # Mostrar arrestos
+            if arrestos:
+                arrestos_texto = ""
+                for arresto in arrestos:
+                    arresto_id = arresto['id']
+                    razon = arresto['razon']
+                    tiempo_prision = arresto['tiempo_prision']
+                    monto_multa = arresto['monto_multa']
+                    foto_url = arresto['foto_url']
+                    fecha_arresto = arresto['fecha_arresto']
+                    oficial_id = arresto['oficial_id']
+                    
+                    oficial_nombre = "Oficial Desconocido"
+                    try:
+                        if oficial_id and oficial_id.isdigit():
+                            oficial = interaction.guild.get_member(int(oficial_id))
+                            oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
+                        else:
+                            logger.warning(f"ID de oficial inválido en arresto {arresto_id}: {oficial_id}")
+                    except ValueError as e:
+                        logger.error(f"Error al convertir oficial_id en arresto {arresto_id}: {str(e)}")
+                    
+                    arrestos_texto += (
+                        f"**Expediente N° {arresto_id:06d}**\n"
+                        f"📜 **Delito:** {razon}\n"
+                        f"⛓️ **Sentencia:** {tiempo_prision}\n"
+                        f"💸 **Multa:** ${monto_multa:,} CLP\n"
+                        f"📅 **Fecha:** {fecha_arresto}\n"
+                        f"👮 **Oficial:** {oficial_nombre}\n\n"
+                    )
+                embed.add_field(
+                    name="🚨 ARRESTOS",
+                    value=arrestos_texto or "No hay arrestos registrados.",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="🚨 ARRESTOS",
+                    value="No hay arrestos registrados.",
+                    inline=False
+                )
+            
+            # Mostrar multas
+            if multas:
+                multas_texto = ""
+                for multa in multas:
+                    multa_id = multa['id']
+                    razon = multa['razon']
+                    monto_multa = multa['monto_multa']
+                    foto_url = multa['foto_url']
+                    fecha_multa = multa['fecha_multa']
+                    oficial_id = multa['oficial_id']
+                    
+                    oficial_nombre = "Oficial Desconocido"
+                    try:
+                        if oficial_id and oficial_id.isdigit():
+                            oficial = interaction.guild.get_member(int(oficial_id))
+                            oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
+                        else:
+                            logger.warning(f"ID de oficial inválido en multa {multa_id}: {oficial_id}")
+                    except ValueError as e:
+                        logger.error(f"Error al convertir oficial_id en multa {multa_id}: {str(e)}")
+                    
+                    multas_texto += (
+                        f"**Multa N° {multa_id:06d}**\n"
+                        f"📜 **Motivo:** {razon}\n"
+                        f"💸 **Monto:** ${monto_multa:,} CLP\n"
+                        f"📅 **Fecha:** {fecha_multa}\n"
+                        f"👮 **Oficial:** {oficial_nombre}\n\n"
+                    )
+                embed.add_field(
+                    name="📝 MULTAS",
+                    value=multas_texto or "No hay multas registradas.",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="📝 MULTAS",
+                    value="No hay multas registradas.",
+                    inline=False
+                )
+            
             embed.set_thumbnail(url=avatar_url)
             embed.set_footer(
                 text="Sistema de Justicia - SantiagoRP",
                 icon_url=interaction.guild.icon.url if interaction.guild.icon else None
             )
+            
             await interaction.followup.send(embed=embed)
-            return
         
-        # Crear embed principal
-        embed = discord.Embed(
-            title="📜 ANTECEDENTES PENALES 📜",
-            description=f"**Reporte completo de antecedentes para {ciudadano.mention}**",
-            color=discord.Color.purple(),
-            timestamp=datetime.now()
-        )
-        
-        embed.add_field(
-            name="👤 DATOS DEL CIUDADANO",
-            value=f"**Nombre:** {nombre} {apellido}\n**RUT:** {rut}\n**ID:** {ciudadano.id}",
-            inline=False
-        )
-        
-        # Mostrar arrestos
-        if arrestos:
-            arrestos_texto = ""
-            for arresto in arrestos:
-                arresto_id, razon, tiempo_prision, monto_multa, foto_url, fecha_arresto, oficial_id = arresto
-                oficial = interaction.guild.get_member(int(oficial_id))
-                oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
-                arrestos_texto += (
-                    f"**Expediente N° {arresto_id:06d}**\n"
-                    f"📜 **Delito:** {razon}\n"
-                    f"⛓️ **Sentencia:** {tiempo_prision}\n"
-                    f"💸 **Multa:** ${monto_multa:,} CLP\n"
-                    f"📅 **Fecha:** {fecha_arresto}\n"
-                    f"👮 **Oficial:** {oficial_nombre}\n\n"
-                )
-            embed.add_field(
-                name="🚨 ARRESTOS",
-                value=arrestos_texto or "No hay arrestos registrados.",
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name="🚨 ARRESTOS",
-                value="No hay arrestos registrados.",
-                inline=False
-            )
-        
-        # Mostrar multas
-        if multas:
-            multas_texto = ""
-            for multa in multas:
-                multa_id, razon, monto_multa, foto_url, fecha_multa, oficial_id = multa
-                oficial = interaction.guild.get_member(int(oficial_id))
-                oficial_nombre = oficial.display_name if oficial else "Oficial Desconocido"
-                multas_texto += (
-                    f"**Multa N° {multa_id:06d}**\n"
-                    f"📜 **Motivo:** {razon}\n"
-                    f"💸 **Monto:** ${monto_multa:,} CLP\n"
-                    f"📅 **Fecha:** {fecha_multa}\n"
-                    f"👮 **Oficial:** {oficial_nombre}\n\n"
-                )
-            embed.add_field(
-                name="📝 MULTAS",
-                value=multas_texto or "No hay multas registradas.",
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name="📝 MULTAS",
-                value="No hay multas registradas.",
-                inline=False
-            )
-        
-        embed.set_thumbnail(url=avatar_url)
-        embed.set_footer(
-            text="Sistema de Justicia - SantiagoRP",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-        )
-        
-        await interaction.followup.send(embed=embed)
+        finally:
+            cursor.close()
+            conn.close()
     
     except mysql.connector.Error as e:
         logger.error(f"Error al consultar antecedentes en la base de datos: {e}")
@@ -4017,6 +4040,15 @@ async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: di
         embed = discord.Embed(
             title="⚠️ ERROR AL MOSTRAR ANTECEDENTES ⚠️",
             description="Ocurrió un error al mostrar los antecedentes. Por favor, intenta de nuevo más tarde.",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.error(f"Error inesperado en ver_antecedentes: {str(e)}")
+        embed = discord.Embed(
+            title="⚠️ ERROR INESPERADO ⚠️",
+            description="Ocurrió un error inesperado al procesar el comando. Por favor, intenta de nuevo más tarde.",
             color=discord.Color.red()
         )
         embed.set_footer(text="Sistema de Justicia - SantiagoRP")
