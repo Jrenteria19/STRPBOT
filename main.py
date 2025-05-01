@@ -521,7 +521,7 @@ async def slash_crear_cedula(
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
-    
+
     # Validar género
     if genero.upper() not in ['M', 'F']:
         embed = discord.Embed(
@@ -531,17 +531,17 @@ async def slash_crear_cedula(
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
-    
+
     # Obtener avatar de Roblox
     avatar_url = await obtener_avatar_roblox(usuario_roblox)
-    
+
     # Generar RUT único
     rut = generar_rut()
-    
+
     # Generar fechas de emisión y vencimiento
     fecha_emision = datetime.now().strftime("%d/%m/%Y")
     fecha_vencimiento = (datetime.now() + timedelta(days=365*5)).strftime("%d/%m/%Y")  # 5 años de validez
-    
+
     # Guardar en la base de datos
     cursor, conn = execute_with_retry('''
     INSERT INTO cedulas (
@@ -554,7 +554,7 @@ async def slash_crear_cedula(
         apellido_materno, fecha_nacimiento, edad, nacionalidad, genero.upper(),
         usuario_roblox, fecha_emision, fecha_vencimiento, avatar_url
     ))
-    
+
     try:
         # Crear embed con la información de la cédula, siguiendo el formato de la imagen
         embed = discord.Embed(
@@ -562,7 +562,7 @@ async def slash_crear_cedula(
             description=f"**RUT:** {rut}",
             color=discord.Color.blue()
         )
-        
+
         embed.add_field(
             name="Nombres",
             value=f"{primer_nombre} {segundo_nombre}",
@@ -608,11 +608,11 @@ async def slash_crear_cedula(
             value=usuario_roblox,
             inline=True
         )
-        
+
         embed.set_thumbnail(url=avatar_url)
-        
+
         await interaction.followup.send(embed=embed)
-    
+
     except mysql.connector.Error as e:
         embed = discord.Embed(
             title="❌ Error",
@@ -620,7 +620,7 @@ async def slash_crear_cedula(
             color=discord.Color.red()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
-    
+
     finally:
         cursor.close()
         conn.close()
@@ -2652,21 +2652,12 @@ async def slash_entorno(
 ):
     """Envía una alerta de emergencia a los servicios correspondientes"""
     # Verificar si el comando se está ejecutando en el canal correcto
-    canal_permitido_id = 1344075561689026722
+    canal_permitido_id = 1339386616803885094
     if interaction.channel_id != canal_permitido_id:
         embed_error = discord.Embed(
             title="🚫 Canal Incorrecto",
-            description="Este comando solo puede utilizarse en el canal designado para emergencias.",
+            description="Este comando solo puede utilizarse en el canal designado para emergencias.\nPor favor, dirígete a <#1339386616803885094> para reportar emergencias.",
             color=discord.Color.red()
-        )
-        embed_error.add_field(
-            name="📋 Instrucciones",
-            value=f"Dirígete al canal <#{canal_permitido_id}> para reportar emergencias.",
-            inline=False
-        )
-        embed_error.set_footer(
-            text="Sistema de Emergencias",
-            icon_url=interaction.guild.icon.url if interaction.guild.icon else None
         )
         await interaction.response.send_message(embed=embed_error, ephemeral=True)
         return
@@ -2900,14 +2891,13 @@ async def slash_arrestar_ciudadano(
 ):
     """Registra el arresto de un ciudadano en el sistema (Solo Carabineros y PDI)"""
     # Verificar que el comando se use en el canal correcto
-    CANAL_PERMITIDO = 1344075561689026722
+    CANAL_PERMITIDO = 1363655409797304400 
     if interaction.channel_id != CANAL_PERMITIDO:
         embed = discord.Embed(
             title="⚠️ CANAL INCORRECTO ⚠️",
-            description="Este comando solo puede ser utilizado en el canal designado para procedimientos policiales.",
+            description="Este comando solo puede ser utilizado en el canal designado para procedimientos policiales.\nPor favor, dirígete a <#1363655409797304400> para realizar este procedimiento.",
             color=discord.Color.orange()
         )
-        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
@@ -3245,14 +3235,13 @@ async def slash_multar_ciudadano(
 ):
     """Registra una multa a un ciudadano en el sistema (Solo Carabineros y PDI)"""
     # Verificar que el comando se use en el canal correcto
-    CANAL_PERMITIDO = 1344075561689026722
+    CANAL_PERMITIDO = 1356084986918342748
     if interaction.channel_id != CANAL_PERMITIDO:
         embed = discord.Embed(
             title="⚠️ CANAL INCORRECTO ⚠️",
-            description="Este comando solo puede ser utilizado en el canal designado para procedimientos policiales.",
+            description="Este comando solo puede ser utilizado en el canal designado para procedimientos policiales.\nPor favor, dirígete a <#1356084986918342748> para realizar este procedimiento.",
             color=discord.Color.orange()
         )
-        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
@@ -3830,14 +3819,13 @@ async def slash_borrar_antecedentes(interaction: discord.Interaction, ciudadano:
 async def slash_ver_antecedentes(interaction: discord.Interaction, ciudadano: discord.Member = None):
     """Muestra todos los antecedentes penales (arrestos y multas) de un ciudadano"""
     # Verificar que el comando se use en el canal correcto
-    CANAL_PERMITIDO = 1344075561689026722
+    CANAL_PERMITIDO = 1363655409797304400
     if interaction.channel_id != CANAL_PERMITIDO:
         embed = discord.Embed(
             title="⚠️ CANAL INCORRECTO ⚠️",
-            description="Este comando solo puede ser utilizado en el canal designado para procedimientos policiales.",
+            description="Este comando solo puede ser utilizado en el canal designado para procedimientos policiales.\nPor favor, dirígete a <#1363655409797304400> para realizar este procedimiento.",
             color=discord.Color.orange()
         )
-        embed.set_footer(text="Sistema de Justicia - SantiagoRP")
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
