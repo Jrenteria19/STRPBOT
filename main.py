@@ -16,7 +16,6 @@ import threading
 import time
 import pymysql.cursors
 import mysql.connector
-import pytz
 
 # Configuración del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
